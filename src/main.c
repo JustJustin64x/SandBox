@@ -1,23 +1,36 @@
-#include "raylib.h"
-
-#define SCREEN_WIDTH 800
-#define SCREEN_HEIGHT 600
+#include "common.h"
+#include "simulation.h"
 
 int main(void) {
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "WorldBox Sandbox - C Prototype");
-    SetTargetFPS(60);
+    SetTargetFPS(TARGET_FPS);
+
+    Simulation* sim = Simulation_Create(
+        DEFAULT_WORLD_WIDTH,
+        DEFAULT_WORLD_HEIGHT,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT
+    );
+
+    if (!sim) {
+        CloseWindow();
+        return 1;
+    }
 
     while (!WindowShouldClose()) {
-        // Update Logik hier
+        float dt = GetFrameTime();
 
-        // Zeichnen
+        Simulation_Update(sim, dt);
+
         BeginDrawing();
             ClearBackground(BLACK);
-            DrawText("WorldBox C Prototype", 20, 20, 20, RAYWHITE);
-            DrawText("Druecke ESC zum Beenden", 20, 50, 16, GRAY);
+            Simulation_DrawWorld(sim);
+            Simulation_DrawUI(sim);
         EndDrawing();
     }
 
+    Simulation_Destroy(sim);
     CloseWindow();
+
     return 0;
 }
