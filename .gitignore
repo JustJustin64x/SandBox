@@ -1,0 +1,21 @@
+# Kompilierte Binärdateien & Build-Ordner
+*.exe
+*.out
+*.app
+build/
+bin/
+
+# Objektdateien & Debug-Symbole
+*.o
+*.obj
+*.dSYM/
+*.pdb
+
+# VS Code temporäre Daten (Einstellungen bleiben erhalten)
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# Betriebssystem-Dateien
+.DS_Store
+Thumbs.db
