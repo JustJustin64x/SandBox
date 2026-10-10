@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -Iinclude
-LDFLAGS = -lraylib -lm -lpthread -ldl
+CFLAGS = -Wall -Wextra -std=c99 -Iinclude -I/opt/homebrew/include
+LDFLAGS = -L/opt/homebrew/lib -lraylib -lm -lpthread
 
 TARGET = worldbox
 SRC = $(wildcard src/*.c)
