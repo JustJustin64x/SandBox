@@ -1,36 +1,33 @@
 #include "common.h"
 #include "simulation.h"
 
-int main(void) {
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "WorldBox Sandbox - C Prototype");
+int main() {
+    // Raylib-Fenster initialisieren
+    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Stone Age 2D Sandbox - Primitive Survival & Evolution");
     SetTargetFPS(TARGET_FPS);
 
-    Simulation* sim = Simulation_Create(
+    // Hauptsimulation erzeugen
+    Simulation sim(
         DEFAULT_WORLD_WIDTH,
         DEFAULT_WORLD_HEIGHT,
         SCREEN_WIDTH,
         SCREEN_HEIGHT
     );
 
-    if (!sim) {
-        CloseWindow();
-        return 1;
-    }
-
+    // Spiel-Loop
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
 
-        Simulation_Update(sim, dt);
+        sim.Update(dt);
 
         BeginDrawing();
             ClearBackground(BLACK);
-            Simulation_DrawWorld(sim);
-            Simulation_DrawUI(sim);
+            sim.DrawWorld();
+            sim.DrawUI();
         EndDrawing();
     }
 
-    Simulation_Destroy(sim);
     CloseWindow();
-
     return 0;
 }
+

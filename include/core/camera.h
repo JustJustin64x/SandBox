@@ -1,0 +1,20 @@
+#ifndef CAMERA_H
+#define CAMERA_H
+
+#include "common.h"
+
+// Steuert die 2D-Kamera: WASD/Pfeiltasten, Ziehen mit mittlerer Maustaste,
+// Mausrad-Zoom zentriert auf den Mauszeiger.
+class CameraController {
+public:
+    CameraController(int screenWidth, int screenHeight, Vector2 focus, float zoom = 2.0f);
+
+    void Update(float deltaTime);
+    const Camera2D& Get() const { return camera_; }
+    Vector2 ScreenToWorld(Vector2 screenPos) const { return GetScreenToWorld2D(screenPos, camera_); }
+
+private:
+    Camera2D camera_;
+};
+
+#endif // CAMERA_H
