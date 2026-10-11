@@ -1,9 +1,10 @@
 #include "ui/main_menu.h"
+#include "common.h"
 
 MainMenu::MainMenu() {
     // Buttons mittig im Fenster (bei 1920x1080 Auflösung) platzieren
     // Format: { X, Y, Breite, Hoehe }
-    float centerX = 1920.0f / 2.0f;
+    float centerX = (float)SCREEN_WIDTH / 2.0f;
     startButton = { centerX - 120.0f, 320.0f, 240.0f, 55.0f };
     exitButton  = { centerX - 120.0f, 400.0f, 240.0f, 55.0f };
 }
@@ -30,7 +31,7 @@ void MainMenu::Draw() const {
     // 1. Hintergrund zeichnen (z. B. dunkles Steingrau passend zur Steinzeit)
     ClearBackground(Color{ 30, 32, 36, 255 });
 
-    int screenW = GetScreenWidth();
+    int screenW = SCREEN_WIDTH;
 
     // 2. Spieltitel & Untertitel
     int titleW = MeasureText("PRIMITIVE SANDBOX", 48);

@@ -319,7 +319,7 @@ bool World::FindPath(Vector2 from, Vector2 to, std::vector<Vector2>& outPath) co
 // ============================================================================
 void World::Draw(const Camera2D& camera) const {
     const Vector2 topLeft = GetScreenToWorld2D({ 0.0f, 0.0f }, camera);
-    const Vector2 bottomRight = GetScreenToWorld2D({ (float)GetScreenWidth(), (float)GetScreenHeight() }, camera);
+    const Vector2 bottomRight = GetScreenToWorld2D({ (float)SCREEN_WIDTH, (float)SCREEN_HEIGHT }, camera);
 
     const int x0 = std::max(0, ToTile(topLeft.x) - 1);
     const int y0 = std::max(0, ToTile(topLeft.y) - 1);

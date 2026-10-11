@@ -1,5 +1,6 @@
 #include "core/common.h"
 #include "simulation.h"
+#include "render_manager.h"
 
 // -----------------------------------------------------------------------------
 // 1. ZUSTÄNDE DER ANWENDUNG
@@ -13,8 +14,9 @@ enum class AppState {
 // 2. HAUPTPROGRAMM
 // -----------------------------------------------------------------------------
 int main() {
-    // Fenster initialisieren
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Stone Age 2D Sandbox - Primitive Survival & Evolution");
+    // Fenster & Render-Management initialisieren (HiDPI, dynamic resize, Centering)
+    RenderManager renderMgr(SCREEN_WIDTH, SCREEN_HEIGHT);
+    renderMgr.InitWindowAndContext("Stone Age 2D Sandbox - Primitive Survival & Evolution");
     SetTargetFPS(TARGET_FPS);
 
     // WICHTIG: Raylib daran hindern, das Fenster bei ESC zu schließen,
@@ -50,7 +52,10 @@ int main() {
     // =========================================================================
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
-        Vector2 mousePos = GetMousePosition();
+
+        // Auflösungs- & Letterbox-Management aktualisieren
+        renderMgr.Update();
+        Vector2 mousePos = renderMgr.GetVirtualMousePosition();
 
         // ---------------------------------------------------------------------
         // MAUS-SCHUTZ: Verhindert Klick-Durchgriff (Click-Through)
@@ -173,8 +178,7 @@ int main() {
         // ---------------------------------------------------------------------
         // B) ZEICHNEN (DRAW)
         // ---------------------------------------------------------------------
-        BeginDrawing();
-            ClearBackground(BLACK);
+        renderMgr.BeginVirtual();
 
             if (currentState == AppState::MENU) {
                 // --- 1. STARTBILDSCHIRM ZEICHNEN ---
@@ -265,10 +269,13 @@ int main() {
                     DrawText(hint, (int)(tabMenuBox.x + (tabMenuBox.width - hintW) / 2), (int)tabMenuBox.y + 305, 15, LIGHTGRAY);
                 }
             }
-        EndDrawing();
+        renderMgr.EndVirtual();
+
+        // Skaliert auf Fenstergröße und zeichnet Letterbox-Balken
+        renderMgr.Present();
     }
 
     // Aufräumen & Beenden
-    CloseWindow();
+    renderMgr.Shutdown();
     return 0;
 }

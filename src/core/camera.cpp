@@ -25,13 +25,17 @@ void CameraController::Update(float deltaTime) {
     // 3. Mausrad-Zoom zentriert auf Mauszeiger
     const float wheel = GetMouseWheelMove();
     if (wheel != 0.0f) {
-        const Vector2 mouseWorldPos = GetScreenToWorld2D(GetMousePosition(), camera_);
-        camera_.offset = GetMousePosition();
-        camera_.target = mouseWorldPos;
+        Vector2 mouse = GetMousePosition();
+        // Zoom nur ausführen, wenn die Maus innerhalb des virtuellen Bildschirms liegt
+        if (mouse.x >= 0.0f && mouse.x <= SCREEN_WIDTH && mouse.y >= 0.0f && mouse.y <= SCREEN_HEIGHT) {
+            const Vector2 mouseWorldPos = GetScreenToWorld2D(mouse, camera_);
+            camera_.offset = mouse;
+            camera_.target = mouseWorldPos;
 
-        camera_.zoom += 0.25f * wheel;
-        if (camera_.zoom < 0.25f) camera_.zoom = 0.25f;
-        if (camera_.zoom > 8.0f)  camera_.zoom = 8.0f;
+            camera_.zoom += 0.25f * wheel;
+            if (camera_.zoom < 0.25f) camera_.zoom = 0.25f;
+            if (camera_.zoom > 8.0f)  camera_.zoom = 8.0f;
+        }
     }
 }
 

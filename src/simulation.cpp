@@ -121,21 +121,23 @@ void Simulation::HandleInput() {
     Vector2 mouseScreen = GetMousePosition();
     Vector2 mouseWorld = camera_.ScreenToWorld(mouseScreen);
 
-    // Prüfen, ob Maus im spielbaren Bereich liegt (nicht in oberer Leiste, nicht im Inspektor-Panel)
+    // Prüfen, ob Maus im spielbaren Bereich liegt (nicht in oberer Leiste, nicht im Inspektor-Panel, nicht in Letterbox-Rändern)
+    bool outOfVirtualScreen = (mouseScreen.x < 0.0f || mouseScreen.x > (float)SCREEN_WIDTH ||
+                               mouseScreen.y < 0.0f || mouseScreen.y > (float)SCREEN_HEIGHT);
     bool inTopBar = (mouseScreen.y <= 48);
-    bool inBottomHUD = (mouseScreen.y >= GetScreenHeight() - 36 && mouseScreen.x <= 360);
+    bool inBottomHUD = (mouseScreen.y >= SCREEN_HEIGHT - 36 && mouseScreen.x <= 360);
     bool inInspector = false;
     if (selectedCavemanId_ != -1) {
         float panelW = 280.0f;
         float panelH = 260.0f;
-        float panelX = (float)GetScreenWidth() - panelW - 16.0f;
+        float panelX = (float)SCREEN_WIDTH - panelW - 16.0f;
         float panelY = 60.0f;
         Rectangle inspRect = { panelX, panelY, panelW, panelH };
         if (CheckCollisionPointRec(mouseScreen, inspRect)) {
             inInspector = true;
         }
     }
-    bool canInteractWithWorld = !inTopBar && !inBottomHUD && !inInspector;
+    bool canInteractWithWorld = !outOfVirtualScreen && !inTopBar && !inBottomHUD && !inInspector;
 
     // Linksklick: Entweder Inspektion, Spawnen oder Terrain malen (über TAB-Aktionsmenü gesteuert)
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -243,7 +245,7 @@ void Simulation::DrawWorld() const {
 
     // 5. Aktions-Vorschau an Mausposition
     Vector2 mouseScreen = GetMousePosition();
-    if (mouseScreen.y > 48 && mouseScreen.y < GetScreenHeight() - 36) {
+    if (mouseScreen.x >= 0 && mouseScreen.x <= SCREEN_WIDTH && mouseScreen.y > 48 && mouseScreen.y < SCREEN_HEIGHT - 36) {
         Vector2 mouseWorld = camera_.ScreenToWorld(mouseScreen);
         if (currentAction_ == SelectedAction::SPAWN_HUNTER) {
             DrawCircleLines((int)mouseWorld.x, (int)mouseWorld.y, 14.0f, PURPLE);
@@ -260,8 +262,8 @@ void Simulation::DrawWorld() const {
 }
 
 void Simulation::DrawUI() const {
-    int screenW = GetScreenWidth();
-    int screenH = GetScreenHeight();
+    int screenW = SCREEN_WIDTH;
+    int screenH = SCREEN_HEIGHT;
 
     // -------------------------------------------------------------------------
     // 1. Obere Statusleiste

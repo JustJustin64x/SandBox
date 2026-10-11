@@ -242,7 +242,7 @@ void ResourceManager::RespawnAnimal(ResourceNode& n, const World& world, Vector2
 // ============================================================================
 void ResourceManager::Draw(const Camera2D& camera) const {
     const Vector2 tl = GetScreenToWorld2D({ 0, 0 }, camera);
-    const Vector2 br = GetScreenToWorld2D({ (float)GetScreenWidth(), (float)GetScreenHeight() }, camera);
+    const Vector2 br = GetScreenToWorld2D({ (float)SCREEN_WIDTH, (float)SCREEN_HEIGHT }, camera);
     const Rectangle view = { tl.x - 32, tl.y - 32, br.x - tl.x + 64, br.y - tl.y + 64 };
 
     for (const ResourceNode& n : nodes_) {
