@@ -93,91 +93,91 @@ void Simulation::SpawnAnimal(Vector2 worldPos) {
     }
 }
 
-void Simulation::HandleInput() {
-    // Pause umschalten
-    if (IsKeyPressed(KEY_SPACE)) {
-        isPaused_ = !isPaused_;
+void Simulation::SetCurrentAction(SelectedAction action) {
+    currentAction_ = action;
+    isPainting_ = false;
+    switch (action) {
+        case SelectedAction::TERRAIN_GRASS:
+            selectedTile_ = TILE_GRASS;
+            break;
+        case SelectedAction::TERRAIN_WATER:
+            selectedTile_ = TILE_SHALLOW_WATER;
+            break;
+        case SelectedAction::TERRAIN_FOREST:
+            selectedTile_ = TILE_FOREST;
+            break;
+        case SelectedAction::SPAWN_HUNTER:
+        case SelectedAction::SPAWN_ANIMAL:
+            break;
     }
+}
 
-    // Geschwindigkeit
+void Simulation::HandleInput() {
+    // Geschwindigkeit (F1-F3)
     if (IsKeyPressed(KEY_F1)) timeSpeed_ = 1.0f;
     if (IsKeyPressed(KEY_F2)) timeSpeed_ = 2.0f;
     if (IsKeyPressed(KEY_F3)) timeSpeed_ = 4.0f;
 
-    // Kachel-Werkzeug wählen (1 bis 6)
-    if (IsKeyPressed(KEY_ONE))   selectedTile_ = TILE_DEEP_WATER;
-    if (IsKeyPressed(KEY_TWO))   selectedTile_ = TILE_SHALLOW_WATER;
-    if (IsKeyPressed(KEY_THREE)) selectedTile_ = TILE_SAND;
-    if (IsKeyPressed(KEY_FOUR))  selectedTile_ = TILE_GRASS;
-    if (IsKeyPressed(KEY_FIVE))  selectedTile_ = TILE_FOREST;
-    if (IsKeyPressed(KEY_SIX))   selectedTile_ = TILE_MOUNTAIN;
-
-    // Pinselgröße (+/-)
-    if (IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_EQUAL)) {
-        if (brushRadius_ < 4) brushRadius_++;
-    }
-    if (IsKeyPressed(KEY_KP_SUBTRACT) || IsKeyPressed(KEY_MINUS)) {
-        if (brushRadius_ > 0) brushRadius_--;
-    }
-
     Vector2 mouseScreen = GetMousePosition();
     Vector2 mouseWorld = camera_.ScreenToWorld(mouseScreen);
 
-    // Klick auf Steinzeitmensch zur Inspektion
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-        bool clickedCaveman = false;
-        for (const auto& c : cavemen_) {
-            if (c.IsDead()) continue;
-            if (Vector2Distance(mouseWorld, c.Position()) < 14.0f) {
-                selectedCavemanId_ = c.Id();
-                clickedCaveman = true;
-                break;
-            }
+    // Prüfen, ob Maus im spielbaren Bereich liegt (nicht in oberer Leiste, nicht im Inspektor-Panel)
+    bool inTopBar = (mouseScreen.y <= 48);
+    bool inBottomHUD = (mouseScreen.y >= GetScreenHeight() - 36 && mouseScreen.x <= 360);
+    bool inInspector = false;
+    if (selectedCavemanId_ != -1) {
+        float panelW = 280.0f;
+        float panelH = 260.0f;
+        float panelX = (float)GetScreenWidth() - panelW - 16.0f;
+        float panelY = 60.0f;
+        Rectangle inspRect = { panelX, panelY, panelW, panelH };
+        if (CheckCollisionPointRec(mouseScreen, inspRect)) {
+            inInspector = true;
         }
+    }
+    bool canInteractWithWorld = !inTopBar && !inBottomHUD && !inInspector;
 
-        // Wenn kein Caveman angeklickt wurde und nicht im UI-Bereich: Terrain malen
-        if (!clickedCaveman && mouseScreen.y > 50 && mouseScreen.y < GetScreenHeight() - 40) {
-            int tx = World::ToTile(mouseWorld.x);
-            int ty = World::ToTile(mouseWorld.y);
-            for (int dy = -brushRadius_; dy <= brushRadius_; ++dy) {
-                for (int dx = -brushRadius_; dx <= brushRadius_; ++dx) {
-                    world_.SetTile(tx + dx, ty + dy, selectedTile_);
+    // Linksklick: Entweder Inspektion, Spawnen oder Terrain malen (über TAB-Aktionsmenü gesteuert)
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (canInteractWithWorld) {
+            // 1. Wenn kein Spawn-Tool aktiv ist, prüfen ob ein Caveman zur Inspektion angeklickt wurde
+            bool clickedCaveman = false;
+            if (currentAction_ != SelectedAction::SPAWN_HUNTER && currentAction_ != SelectedAction::SPAWN_ANIMAL) {
+                for (const auto& c : cavemen_) {
+                    if (c.IsDead()) continue;
+                    if (Vector2Distance(mouseWorld, c.Position()) < 14.0f) {
+                        selectedCavemanId_ = c.Id();
+                        clickedCaveman = true;
+                        break;
+                    }
+                }
+            }
+
+            // 2. Wenn kein Caveman angeklickt wurde: Aktion ausführen
+            if (!clickedCaveman) {
+                if (currentAction_ == SelectedAction::SPAWN_HUNTER) {
+                    SpawnCaveman(Role::Hunter, mouseWorld);
+                } else if (currentAction_ == SelectedAction::SPAWN_ANIMAL) {
+                    SpawnAnimal(mouseWorld);
+                } else {
+                    isPainting_ = true;
+                    int tx = World::ToTile(mouseWorld.x);
+                    int ty = World::ToTile(mouseWorld.y);
+                    world_.SetTile(tx, ty, selectedTile_);
                 }
             }
         }
-    } else if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && mouseScreen.y > 50 && mouseScreen.y < GetScreenHeight() - 40) {
-        // Kontinuierliches Terrain-Malen beim Ziehen
-        int tx = World::ToTile(mouseWorld.x);
-        int ty = World::ToTile(mouseWorld.y);
-        for (int dy = -brushRadius_; dy <= brushRadius_; ++dy) {
-            for (int dx = -brushRadius_; dx <= brushRadius_; ++dx) {
-                world_.SetTile(tx + dx, ty + dy, selectedTile_);
-            }
+    } else if (isPainting_ && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+        // Kontinuierliches Malen NUR wenn zuvor auf der Welt gestartet wurde!
+        if (canInteractWithWorld) {
+            int tx = World::ToTile(mouseWorld.x);
+            int ty = World::ToTile(mouseWorld.y);
+            world_.SetTile(tx, ty, selectedTile_);
         }
     }
 
-    // Rechtsklick: Entitäten spawnen
-    // Shift: Sammlerin, Strg: Ältester, Alt: Kind, T: Tier, sonst: Jäger
-    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
-        if (IsKeyDown(KEY_T)) {
-            SpawnAnimal(mouseWorld);
-        } else if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
-            SpawnCaveman(Role::Gatherer, mouseWorld);
-        } else if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) {
-            SpawnCaveman(Role::Elder, mouseWorld);
-        } else if (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT)) {
-            SpawnCaveman(Role::Child, mouseWorld);
-        } else {
-            SpawnCaveman(Role::Hunter, mouseWorld);
-        }
-    }
-
-    // Test-Taste 'R': Vorräte aufstocken
-    if (IsKeyPressed(KEY_R)) {
-        tribe_.Stock().food += 10;
-        tribe_.Stock().wood += 10;
-        tribe_.Stock().stone += 5;
-        eventLog_.Add("Cheat: Vorräte aufgestockt (+10 Nahrung, +10 Holz, +5 Stein)!", GREEN);
+    if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+        isPainting_ = false;
     }
 }
 
@@ -241,14 +241,20 @@ void Simulation::DrawWorld() const {
         c->Draw(spriteSheet_, highlighted);
     }
 
-    // 5. Pinsel-Vorschau an Mausposition
-    Vector2 mouseWorld = camera_.ScreenToWorld(GetMousePosition());
-    int tx = World::ToTile(mouseWorld.x);
-    int ty = World::ToTile(mouseWorld.y);
-    int startX = (tx - brushRadius_) * TILE_SIZE;
-    int startY = (ty - brushRadius_) * TILE_SIZE;
-    int size = (brushRadius_ * 2 + 1) * TILE_SIZE;
-    DrawRectangleLines(startX, startY, size, size, WHITE);
+    // 5. Aktions-Vorschau an Mausposition
+    Vector2 mouseScreen = GetMousePosition();
+    if (mouseScreen.y > 48 && mouseScreen.y < GetScreenHeight() - 36) {
+        Vector2 mouseWorld = camera_.ScreenToWorld(mouseScreen);
+        if (currentAction_ == SelectedAction::SPAWN_HUNTER) {
+            DrawCircleLines((int)mouseWorld.x, (int)mouseWorld.y, 14.0f, PURPLE);
+        } else if (currentAction_ == SelectedAction::SPAWN_ANIMAL) {
+            DrawCircleLines((int)mouseWorld.x, (int)mouseWorld.y, 14.0f, ORANGE);
+        } else {
+            int tx = World::ToTile(mouseWorld.x);
+            int ty = World::ToTile(mouseWorld.y);
+            DrawRectangleLines(tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE, WHITE);
+        }
+    }
 
     EndMode2D();
 }
@@ -282,10 +288,6 @@ void Simulation::DrawUI() const {
     DrawText(TextFormat("Holz: %d", stock.wood), 640, 16, 18, { 200, 140, 70, 255 });
     DrawText(TextFormat("Stein: %d", stock.stone), 750, 16, 18, { 190, 190, 190, 255 });
     DrawText(TextFormat("Hütten: %d (Betten: %d)", stock.huts, sleepCap), 870, 16, 18, GOLD);
-
-    // Pinsel
-    const TileProperty& prop = World::GetProperty(selectedTile_);
-    DrawText(TextFormat("Pinsel: %s (R:%d)", prop.name, brushRadius_ + 1), 1140, 16, 16, prop.color);
 
     DrawFPS(screenW - 90, 16);
 
@@ -352,14 +354,5 @@ void Simulation::DrawUI() const {
         DrawText(entry.text.c_str(), 16, logY, 14, Fade(entry.color, 0.9f));
         logY += 18;
     }
-
-    // -------------------------------------------------------------------------
-    // 4. Untere Hilfe- und Steuerungsleiste
-    // -------------------------------------------------------------------------
-    int bottomY = screenH - 32;
-    DrawRectangle(0, bottomY, screenW, 32, Fade(BLACK, 0.85f));
-    DrawRectangleLines(0, bottomY, screenW, 32, Fade(GRAY, 0.5f));
-    DrawText("1-6: Terrain | Links: Malen / Wähle Mensch | Rechts: Jäger (Shift: Sammler, Strg: Ältester, Alt: Kind, T: Tier) | Leertaste: Pause | F1-F3: Tempo | R: Vorräte",
-             15, bottomY + 8, 14, LIGHTGRAY);
 }
 

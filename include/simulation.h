@@ -20,6 +20,15 @@
 #include <vector>
 #include <memory>
 
+// Aktionen/Werkzeuge, die der Spieler auswählen kann (auch via TAB-Menü)
+enum class SelectedAction {
+    TERRAIN_GRASS,
+    TERRAIN_WATER,
+    TERRAIN_FOREST,
+    SPAWN_HUNTER,
+    SPAWN_ANIMAL
+};
+
 class Simulation {
 public:
     Simulation(int worldWidth, int worldHeight, int screenWidth, int screenHeight);
@@ -31,6 +40,12 @@ public:
 
     bool IsPaused() const { return isPaused_; }
     void SetPaused(bool paused) { isPaused_ = paused; }
+
+    SelectedAction GetCurrentAction() const { return currentAction_; }
+    void SetCurrentAction(SelectedAction action);
+
+    // Bricht aktives Zeichnen ab (z.B. wenn ein Menü geöffnet oder geschlossen wird)
+    void CancelActiveInput() { isPainting_ = false; }
 
 private:
     void HandleInput();
@@ -51,9 +66,10 @@ private:
     float totalSimTime_ = 0.0f;
     int nextCavemanId_ = 1;
 
-    // Kachel-Pinsel
+    // Aktive Aktion & Kachel-Auswahl
+    SelectedAction currentAction_ = SelectedAction::TERRAIN_GRASS;
     TileType selectedTile_ = TILE_GRASS;
-    int brushRadius_ = 0;
+    bool isPainting_ = false;
 
     // Selektion / Inspektor
     int selectedCavemanId_ = -1;

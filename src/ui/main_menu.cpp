@@ -30,9 +30,13 @@ void MainMenu::Draw() const {
     // 1. Hintergrund zeichnen (z. B. dunkles Steingrau passend zur Steinzeit)
     ClearBackground(Color{ 30, 32, 36, 255 });
 
+    int screenW = GetScreenWidth();
+
     // 2. Spieltitel & Untertitel
-    DrawText("PRIMITIVE SANDBOX", 1280 / 2 - 260, 160, 48, RAYWHITE);
-    DrawText("A Stone Age Evolution Simulator", 1280 / 2 - 180, 220, 20, LIGHTGRAY);
+    int titleW = MeasureText("PRIMITIVE SANDBOX", 48);
+    DrawText("PRIMITIVE SANDBOX", (screenW - titleW) / 2, 160, 48, RAYWHITE);
+    int subW = MeasureText("A Stone Age Evolution Simulator", 20);
+    DrawText("A Stone Age Evolution Simulator", (screenW - subW) / 2, 220, 20, LIGHTGRAY);
 
     // 3. Start-Button (Farbe wechselt bei Mausberührung / Hover)
     bool hoverStart = CheckCollisionPointRec(mousePos, startButton);
