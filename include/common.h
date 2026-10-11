@@ -1,19 +1,20 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+// Gemeinsame Includes und globale Konstanten für das gesamte Projekt.
 #include "raylib.h"
 #include "raymath.h"
-#include <stdbool.h>
-#include <stdlib.h>
-#include <stdio.h>
 
-#define SCREEN_WIDTH 1280
-#define SCREEN_HEIGHT 720
-#define TARGET_FPS 60
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
-#define DEFAULT_WORLD_WIDTH 80
-#define DEFAULT_WORLD_HEIGHT 50
-#define TILE_SIZE 16
+constexpr int SCREEN_WIDTH  = 1920;
+constexpr int SCREEN_HEIGHT = 1080;
+constexpr int TARGET_FPS    = 60;
+
+constexpr int DEFAULT_WORLD_WIDTH  = 160;   // in Kacheln
+constexpr int DEFAULT_WORLD_HEIGHT = 100;   // in Kacheln
+constexpr int TILE_SIZE            = 16;    // Pixel pro Kachel
 
 #endif // COMMON_H
-

@@ -7,7 +7,7 @@ Camera2D Camera_Create(int screenWidth, int screenHeight, int worldPixelWidth, i
     camera.rotation = 0.0f;
     camera.zoom = 1.0f;
     return camera;
-}
+}s
 
 void Camera_Update(Camera2D* camera, float deltaTime) {
     if (!camera) return;

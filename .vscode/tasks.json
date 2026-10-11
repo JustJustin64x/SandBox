@@ -5,11 +5,33 @@
             "type": "shell",
             "label": "Build WorldBox",
             "command": "make",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
             "problemMatcher": ["$gcc"]
+        },
+        {
+            "type": "shell",
+            "label": "Clean WorldBox",
+            "command": "make clean",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "type": "shell",
+            "label": "Run WorldBox",
+            "command": "make run",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "Build WorldBox",
+            "problemMatcher": []
         }
     ]
 }
