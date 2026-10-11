@@ -17,6 +17,9 @@
 // --- Graphics ---
 #include "gfx/sprite_sheet.h"
 
+// --- Civilization Simulation ---
+#include "civ/WorldSimulation.h"
+
 #include <vector>
 #include <memory>
 
@@ -73,6 +76,10 @@ private:
 
     // Selektion / Inspektor
     int selectedCavemanId_ = -1;
+    int selectedCreatureId_ = -1;
+
+    // Modulare Zivilisations-Simulation
+    WorldSimulation civSim_;
 };
 
 #endif // SIMULATION_H

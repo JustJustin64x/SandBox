@@ -5,6 +5,7 @@ CXXFLAGS = -Wall -Wextra -std=c++17 \
            -Iinclude/gfx \
            -Iinclude/world \
            -Iinclude/entities \
+           -Iinclude/civ \
            -O2
 
 # Alle Quelldateien rekursiv erfassen

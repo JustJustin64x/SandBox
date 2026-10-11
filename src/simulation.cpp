@@ -24,7 +24,8 @@ const char* RoleDefaultNames(Role role, int id) {
 Simulation::Simulation(int worldWidth, int worldHeight, int screenWidth, int screenHeight)
     : world_(worldWidth, worldHeight, 4242u),
       camera_(screenWidth, screenHeight, world_.CenterPosition(), 2.2f),
-      tribe_(world_.CenterPosition()) {
+      tribe_(world_.CenterPosition()),
+      civSim_({ world_.CenterPosition().x + 50.0f, world_.CenterPosition().y }, 5) {
 
     // 1. Sprite-Sheet laden
     SpriteSheetConfig spriteConfig;
@@ -142,21 +143,36 @@ void Simulation::HandleInput() {
     // Linksklick: Entweder Inspektion, Spawnen oder Terrain malen (über TAB-Aktionsmenü gesteuert)
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         if (canInteractWithWorld) {
-            // 1. Wenn kein Spawn-Tool aktiv ist, prüfen ob ein Caveman zur Inspektion angeklickt wurde
-            bool clickedCaveman = false;
+            // 1. Wenn kein Spawn-Tool aktiv ist, prüfen ob ein Wesen/Mensch zur Inspektion angeklickt wurde
+            bool clickedEntity = false;
             if (currentAction_ != SelectedAction::SPAWN_HUNTER && currentAction_ != SelectedAction::SPAWN_ANIMAL) {
-                for (const auto& c : cavemen_) {
+                // Zuerst Zivilisations-Creatures prüfen
+                for (const auto& c : civSim_.Creatures()) {
                     if (c.IsDead()) continue;
                     if (Vector2Distance(mouseWorld, c.Position()) < 14.0f) {
-                        selectedCavemanId_ = c.Id();
-                        clickedCaveman = true;
+                        selectedCreatureId_ = c.Id();
+                        selectedCavemanId_ = -1;
+                        clickedEntity = true;
                         break;
+                    }
+                }
+
+                // Danach Cavemen prüfen
+                if (!clickedEntity) {
+                    for (const auto& c : cavemen_) {
+                        if (c.IsDead()) continue;
+                        if (Vector2Distance(mouseWorld, c.Position()) < 14.0f) {
+                            selectedCavemanId_ = c.Id();
+                            selectedCreatureId_ = -1;
+                            clickedEntity = true;
+                            break;
+                        }
                     }
                 }
             }
 
-            // 2. Wenn kein Caveman angeklickt wurde: Aktion ausführen
-            if (!clickedCaveman) {
+            // 2. Wenn keine Entity angeklickt wurde: Aktion ausführen
+            if (!clickedEntity) {
                 if (currentAction_ == SelectedAction::SPAWN_HUNTER) {
                     SpawnCaveman(Role::Hunter, mouseWorld);
                 } else if (currentAction_ == SelectedAction::SPAWN_ANIMAL) {
@@ -209,6 +225,9 @@ void Simulation::Update(float dt) {
             c.Update(ctx, step);
         }
 
+        // 3. Modulare Zivilisations-Simulation updaten (Creatures, Siedlung, Epochen)
+        civSim_.Update(step, world_, eventLog_);
+
         remaining -= step;
     }
 }
@@ -225,7 +244,10 @@ void Simulation::DrawWorld() const {
     // 3. Stamm (Lagerfeuer, Vorratslager, Hütten)
     tribe_.Draw(totalSimTime_);
 
-    // 4. Steinzeitmenschen Y-sortiert zeichnen (Tiefensortierung)
+    // 4. Modulare Zivilisations-Siedlung & Kreaturen zeichnen
+    civSim_.DrawWorld(&spriteSheet_, selectedCreatureId_);
+
+    // 5. Steinzeitmenschen Y-sortiert zeichnen (Tiefensortierung)
     std::vector<const Caveman*> sortedCavemen;
     sortedCavemen.reserve(cavemen_.size());
     for (const auto& c : cavemen_) {
@@ -294,8 +316,52 @@ void Simulation::DrawUI() const {
     DrawFPS(screenW - 90, 16);
 
     // -------------------------------------------------------------------------
-    // 2. Inspektor-Panel für selektierten Steinzeitmenschen (rechts)
+    // 2. Inspektor-Panel (rechts)
     // -------------------------------------------------------------------------
+    // 2a. Inspektor für selektierte Zivilisations-Creature
+    const Creature* selectedCreature = civSim_.GetCreatureById(selectedCreatureId_);
+    if (selectedCreature && !selectedCreature->IsDead()) {
+        int panelW = 280;
+        int panelH = 260;
+        int panelX = screenW - panelW - 16;
+        int panelY = 60;
+
+        DrawRectangle(panelX, panelY, panelW, panelH, Fade(BLACK, 0.85f));
+        DrawRectangleLines(panelX, panelY, panelW, panelH, SKYBLUE);
+
+        DrawText(selectedCreature->Name().c_str(), panelX + 14, panelY + 12, 18, RAYWHITE);
+        DrawText(TextFormat("Epoche: %s", civSim_.Tech().CurrentAgeName()), panelX + 14, panelY + 34, 15, GOLD);
+
+        DrawText(TextFormat("Status: %s", Creature::StateToString(selectedCreature->State())), panelX + 14, panelY + 56, 12, YELLOW);
+        DrawText(TextFormat("Aktivitaet: %s", selectedCreature->ActivityDescription().c_str()), panelX + 14, panelY + 74, 12, LIGHTGRAY);
+
+        auto drawStatBar = [&](const char* label, float val, float maxVal, int y, Color barColor) {
+            DrawText(TextFormat("%s: %.0f/%.0f", label, val, maxVal), panelX + 14, y, 13, RAYWHITE);
+            int barX = panelX + 120;
+            int barW = 140;
+            int barH = 12;
+            DrawRectangle(barX, y + 1, barW, barH, Fade(GRAY, 0.4f));
+            float pct = std::clamp(val / maxVal, 0.0f, 1.0f);
+            DrawRectangle(barX, y + 1, (int)(barW * pct), barH, barColor);
+            DrawRectangleLines(barX, y + 1, barW, barH, Fade(WHITE, 0.5f));
+        };
+
+        drawStatBar("Gesundheit", selectedCreature->Health(), 100.0f, panelY + 100, (selectedCreature->Health() > 50) ? GREEN : RED);
+        drawStatBar("Hunger", selectedCreature->Hunger(), 100.0f, panelY + 124, (selectedCreature->Hunger() > 70) ? RED : ORANGE);
+        drawStatBar("Energie", selectedCreature->Energy(), 100.0f, panelY + 148, SKYBLUE);
+
+        if (selectedCreature->CarriedAmount() > 0) {
+            DrawText(TextFormat("Traegt: %d x %s", selectedCreature->CarriedAmount(),
+                     CivilizationTech::ResourceToString(selectedCreature->CarriedResource())),
+                     panelX + 14, panelY + 180, 13, GREEN);
+        } else {
+            DrawText("Traegt: nichts", panelX + 14, panelY + 180, 13, DARKGRAY);
+        }
+
+        DrawText("Fokus: Zivilisations-Creature", panelX + 14, panelY + 230, 11, GRAY);
+    }
+
+    // 2b. Inspektor-Panel für selektierten Steinzeitmenschen (rechts)
     const Caveman* selected = nullptr;
     for (const auto& c : cavemen_) {
         if (c.Id() == selectedCavemanId_ && !c.IsDead()) {
@@ -346,6 +412,11 @@ void Simulation::DrawUI() const {
 
         DrawText("Klick auf anderen Menschen zum Wechseln", panelX + 14, panelY + 230, 11, GRAY);
     }
+
+    // -------------------------------------------------------------------------
+    // 3. Zivilisations-Status & Epochen-Leiste
+    // -------------------------------------------------------------------------
+    civSim_.DrawUI(screenW, screenH);
 
     // -------------------------------------------------------------------------
     // 3. Ereignis-Log (unten links)
