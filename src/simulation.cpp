@@ -1,5 +1,5 @@
 #include "simulation.h"
-#include "config.h"
+#include "core/config.h"
 
 #include <algorithm>
 #include <cmath>

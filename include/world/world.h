@@ -1,7 +1,6 @@
-#ifndef WORLD_H
-#define WORLD_H
+#pragma once
 
-#include "common.h"
+#include "core/common.h"
 
 #include <functional>
 #include <vector>
@@ -81,4 +80,3 @@ private:
     mutable unsigned int stamp_ = 0;
 };
 
-#endif // WORLD_H

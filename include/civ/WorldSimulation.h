@@ -1,9 +1,9 @@
 #pragma once
 
 #include "core/common.h"
-#include "CivilizationTech.h"
-#include "Settlement.h"
-#include "Creature.h"
+#include "civ/CivilizationTech.h"
+#include "civ/Settlement.h"
+#include "civ/Creature.h"
 
 #include <vector>
 #include <memory>

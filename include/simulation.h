@@ -1,5 +1,4 @@
-#ifndef SIMULATION_H
-#define SIMULATION_H
+#pragma once
 
 // --- Core ---
 #include "core/common.h"
@@ -82,4 +81,3 @@ private:
     WorldSimulation civSim_;
 };
 
-#endif // SIMULATION_H

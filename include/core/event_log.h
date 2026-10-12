@@ -1,7 +1,6 @@
-#ifndef EVENT_LOG_H
-#define EVENT_LOG_H
+#pragma once
 
-#include "common.h"
+#include "core/common.h"
 
 #include <cstddef>
 #include <deque>
@@ -34,6 +33,4 @@ private:
     std::deque<LogEntry> entries_;
     float time_ = 0.0f;
 };
-
-#endif // EVENT_LOG_H
 

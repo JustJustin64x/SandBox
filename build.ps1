@@ -33,7 +33,7 @@ try {
     }
 
     if ($Test) {
-        & $compiler -Wall -Wextra -std=c++17 -Iinclude/core -isystem "$raylib/src" tests/render_manager_test.cpp src/core/render_manager.cpp -o build/render-test.exe $library -lopengl32 -lgdi32 -lwinmm -static-libgcc -static-libstdc++
+        & $compiler -Wall -Wextra -std=c++17 -Iinclude -isystem "$raylib/src" tests/render_manager_test.cpp src/core/render_manager.cpp -o build/render-test.exe $library -lopengl32 -lgdi32 -lwinmm -static-libgcc -static-libstdc++
         if ($LASTEXITCODE -ne 0) { throw 'Could not compile rendering regression test.' }
         & ./build/render-test.exe
         if ($LASTEXITCODE -ne 0) { throw 'Rendering regression test failed.' }

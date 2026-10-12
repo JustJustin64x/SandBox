@@ -1,6 +1,6 @@
-#include "resource_node.h"
-#include "config.h"
-#include "world.h"
+#include "world/resource_node.h"
+#include "core/config.h"
+#include "world/world.h"
 
 #include <algorithm>
 

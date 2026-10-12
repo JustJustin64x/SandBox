@@ -1,5 +1,5 @@
 #include "ui/main_menu.h"
-#include "common.h"
+#include "core/common.h"
 
 MainMenu::MainMenu() {
     // Buttons mittig im Fenster (bei 1920x1080 Auflösung) platzieren

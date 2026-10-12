@@ -1,6 +1,6 @@
 #include "core/common.h"
 #include "simulation.h"
-#include "render_manager.h"
+#include "core/render_manager.h"
 
 // -----------------------------------------------------------------------------
 // 1. ZUSTÄNDE DER ANWENDUNG
@@ -45,7 +45,7 @@ int main() {
     Rectangle exitButton  = { centerX, SCREEN_HEIGHT / 2.0f + 60.0f, btnWidth, btnHeight };
 
     // Kasten für das TAB-Menü
-    Rectangle tabMenuBox = { SCREEN_WIDTH / 2.0f - 250.0f, SCREEN_HEIGHT / 2.0f - 180.0f, 500.0f, 350.0f };
+    Rectangle tabMenuBox = { SCREEN_WIDTH / 2.0f - 250.0f, SCREEN_HEIGHT / 2.0f - 185.0f, 500.0f, 370.0f };
 
     // =========================================================================
     // DIE SPIELSCHLEIFE
@@ -127,6 +127,8 @@ int main() {
                 Rectangle btnHunter = { tabMenuBox.x + 260, tabMenuBox.y + 70,  200, 40 };
                 Rectangle btnAnimal = { tabMenuBox.x + 260, tabMenuBox.y + 120, 200, 40 };
                 Rectangle btnClose  = { tabMenuBox.x + 150, tabMenuBox.y + 240, 200, 36 };
+                //End Button
+                Rectangle btnEnd = { tabMenuBox.x + 150, tabMenuBox.y + 285, 200, 36 };
 
                 if (!ignoreMouseUntilRelease && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                     if (CheckCollisionPointRec(mousePos, btnGrass)) {
@@ -164,6 +166,8 @@ int main() {
                         sim.SetPaused(isPaused);
                         ignoreMouseUntilRelease = true;
                         sim.CancelActiveInput();
+                    } else if (CheckCollisionPointRec(mousePos, btnEnd)) {
+                        break;
                     }
                     // Alle weiteren Klicks im TAB-Overlay werden konsumiert (kein Click-Through!)
                 }
@@ -264,9 +268,12 @@ int main() {
                     // Schließen-Button
                     drawBtn({ tabMenuBox.x + 150, tabMenuBox.y + 240, 200, 36 }, "Schließen", Color{ 70, 70, 80, 255 }, false);
 
+                    // Beenden-Button
+                    drawBtn({ tabMenuBox.x + 150, tabMenuBox.y + 285, 200, 36 }, "Spiel Beenden", Color{ 70, 70, 80, 255 }, false);
+
                     const char* hint = "[TAB] oder [ESC] zum Schließen";
                     int hintW = MeasureText(hint, 15);
-                    DrawText(hint, (int)(tabMenuBox.x + (tabMenuBox.width - hintW) / 2), (int)tabMenuBox.y + 305, 15, LIGHTGRAY);
+                    DrawText(hint, (int)(tabMenuBox.x + (tabMenuBox.width - hintW) / 2), (int)tabMenuBox.y + 332, 15, LIGHTGRAY);
                 }
             }
         renderMgr.EndVirtual();

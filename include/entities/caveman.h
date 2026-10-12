@@ -1,8 +1,7 @@
-#ifndef CAVEMAN_H
-#define CAVEMAN_H
+#pragma once
 
-#include "common.h"
-#include "resource_node.h"
+#include "core/common.h"
+#include "world/resource_node.h"
 
 #include <string>
 #include <vector>
@@ -179,4 +178,3 @@ private:
     float damageFlash_ = 0.0f;
 };
 
-#endif // CAVEMAN_H

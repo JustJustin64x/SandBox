@@ -1,5 +1,5 @@
-#include "CivilizationTech.h"
-#include "Settlement.h"
+#include "civ/CivilizationTech.h"
+#include "civ/Settlement.h"
 
 CivilizationTech::CivilizationTech() {
     // =========================================================================

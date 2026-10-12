@@ -1,4 +1,4 @@
-#include "sprite_sheet.h"
+#include "gfx/sprite_sheet.h"
 
 #include <algorithm>
 #include <cstdint>

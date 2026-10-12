@@ -1,7 +1,7 @@
-#include "tribe.h"
-#include "config.h"
-#include "event_log.h"
-#include "world.h"
+#include "entities/tribe.h"
+#include "core/config.h"
+#include "core/event_log.h"
+#include "world/world.h"
 
 #include <algorithm>
 
