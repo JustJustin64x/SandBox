@@ -1,7 +1,6 @@
-#ifndef TRIBE_H
-#define TRIBE_H
+#pragma once
 
-#include "common.h"
+#include "core/common.h"
 
 #include <vector>
 
@@ -68,5 +67,4 @@ private:
     int activeSite_ = -1;
 };
 
-#endif // TRIBE_H
 

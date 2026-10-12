@@ -1,9 +1,9 @@
-#include "caveman.h"
-#include "config.h"
-#include "event_log.h"
-#include "sprite_sheet.h"
-#include "tribe.h"
-#include "world.h"
+#include "entities/caveman.h"
+#include "core/config.h"
+#include "core/event_log.h"
+#include "gfx/sprite_sheet.h"
+#include "entities/tribe.h"
+#include "world/world.h"
 
 #include <algorithm>
 #include <utility>

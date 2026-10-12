@@ -1,7 +1,6 @@
-#ifndef RENDER_MANAGER_H
-#define RENDER_MANAGER_H
+#pragma once
 
-#include "common.h"
+#include "core/common.h"
 
 // ============================================================================
 //  RenderManager
@@ -79,6 +78,4 @@ private:
     Rectangle destRect_{};
     Rectangle sourceRect_{};
 };
-
-#endif // RENDER_MANAGER_H
 

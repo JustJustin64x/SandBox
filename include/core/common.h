@@ -1,5 +1,4 @@
-#ifndef COMMON_H
-#define COMMON_H
+#pragma once
 
 // Gemeinsame Includes und globale Konstanten für das gesamte Projekt.
 #include "raylib.h"
@@ -20,4 +19,3 @@ constexpr int DEFAULT_WORLD_WIDTH  = 160;   // in Kacheln
 constexpr int DEFAULT_WORLD_HEIGHT = 100;   // in Kacheln
 constexpr int TILE_SIZE            = 16;    // Pixel pro Kachel
 
-#endif // COMMON_H

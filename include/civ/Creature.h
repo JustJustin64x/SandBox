@@ -1,7 +1,7 @@
 #pragma once
 
 #include "core/common.h"
-#include "CivilizationTech.h"
+#include "civ/CivilizationTech.h"
 
 #include <string>
 #include <memory>

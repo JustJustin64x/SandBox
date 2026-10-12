@@ -1,7 +1,6 @@
-#ifndef RESOURCE_NODE_H
-#define RESOURCE_NODE_H
+#pragma once
 
-#include "common.h"
+#include "core/common.h"
 
 #include <vector>
 
@@ -74,5 +73,4 @@ private:
     std::vector<ResourceNode> nodes_;
 };
 
-#endif // RESOURCE_NODE_H
 

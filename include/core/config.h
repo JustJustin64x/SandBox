@@ -1,5 +1,4 @@
-#ifndef CONFIG_H
-#define CONFIG_H
+#pragma once
 
 // ============================================================================
 //  Zentrale Spielbalance. Alle Werte sind bewusst hier gebündelt, damit man
@@ -98,5 +97,4 @@ constexpr float kWorkAnimInterval = 0.35f;
 
 } // namespace cfg
 
-#endif // CONFIG_H
 

@@ -1,5 +1,5 @@
-#include "Creature.h"
-#include "Settlement.h"
+#include "civ/Creature.h"
+#include "civ/Settlement.h"
 #include "world/world.h"
 #include "core/event_log.h"
 #include "gfx/sprite_sheet.h"

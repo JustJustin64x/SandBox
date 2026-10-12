@@ -1,7 +1,6 @@
-#ifndef SPRITE_SHEET_H
-#define SPRITE_SHEET_H
+#pragma once
 
-#include "common.h"
+#include "core/common.h"
 
 #include <string>
 #include <vector>
@@ -101,5 +100,4 @@ private:
     float scale_ = 1.0f;                           // Quellpixel -> Weltpixel
 };
 
-#endif // SPRITE_SHEET_H
 

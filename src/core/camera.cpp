@@ -1,4 +1,4 @@
-#include "camera.h"
+#include "core/camera.h"
 
 CameraController::CameraController(int screenWidth, int screenHeight, Vector2 focus, float zoom) {
     camera_ = Camera2D{};
