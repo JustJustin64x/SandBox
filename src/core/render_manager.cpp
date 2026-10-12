@@ -1,4 +1,5 @@
 #include "render_manager.h"
+#include "rlgl.h"
 
 #include <algorithm>
 #include <cmath>
@@ -35,17 +36,10 @@ void RenderManager::InitWindowAndContext(const char* title) {
     //    Andernfalls (z. B. MacBook 13"-16" Retina mit 1440x900 bis 1728x1117 Points)
     //    skalieren wir das Fenster proportional herunter (ca. 85 % Monitor-Abdeckung),
     //    damit das Fenster zentriert und ohne Ecken-Versatz startet.
-    int initW = virtualWidth_;
-    int initH = virtualHeight_;
-
-    if (monW < virtualWidth_ || monH < virtualHeight_ + 60) {
-        float maxAvailableW = (float)monW * 0.85f;
-        float maxAvailableH = (float)monH * 0.85f;
-        float fitScale = std::min(maxAvailableW / (float)virtualWidth_,
-                                  maxAvailableH / (float)virtualHeight_);
-        initW = (int)((float)virtualWidth_ * fitScale);
-        initH = (int)((float)virtualHeight_ * fitScale);
-    }
+    const float fitScale = std::min({1.0f,
+        monW * 0.85f / virtualWidth_, monH * 0.85f / virtualHeight_});
+    const int initW = std::max(1, (int)(virtualWidth_ * fitScale));
+    const int initH = std::max(1, (int)(virtualHeight_ * fitScale));
 
     SetWindowSize(initW, initH);
     SetWindowPosition((int)(monPos.x + (monW - initW) / 2),
@@ -99,7 +93,7 @@ void RenderManager::CalculateLetterbox() {
     destRect_ = { offsetX_, offsetY_, renderW, renderH };
 
     // Raylib-internes Mauseingabe-System auf virtuelle Koordinaten kalibrieren.
-    // Dadurch liefert GetMousePosition() und GetMouseDelta() überall direkt virtuelle Koordinaten.
+    // GetMousePosition() returns virtual coordinates; GetMouseDelta() stays unscaled.
     SetMouseOffset((int)std::round(-offsetX_), (int)std::round(-offsetY_));
     SetMouseScale(1.0f / scale_, 1.0f / scale_);
 }
@@ -133,6 +127,17 @@ void RenderManager::DrawLetterbox() const {
 
 void RenderManager::Present() {
     BeginDrawing();
+        // raylib 5.5 retains its initial DPI modelview scale after a resize on
+        // Windows. Our destination rectangle is already in window coordinates:
+        // map those coordinates to framebuffer pixels exactly once, including
+        // Retina framebuffers whose pixel size differs from the window size.
+        rlDrawRenderBatchActive();
+        rlViewport(0, 0, GetRenderWidth(), GetRenderHeight());
+        rlMatrixMode(RL_PROJECTION);
+        rlLoadIdentity();
+        rlOrtho(0, std::max(1, GetScreenWidth()), std::max(1, GetScreenHeight()), 0, 0, 1);
+        rlMatrixMode(RL_MODELVIEW);
+        rlLoadIdentity();
         ClearBackground(BLACK); // Zeichnet schwarze Balken (Letterbox / Pillarbox)
         DrawLetterbox();
     EndDrawing();

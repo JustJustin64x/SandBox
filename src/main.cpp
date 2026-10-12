@@ -183,8 +183,8 @@ int main() {
             if (currentState == AppState::MENU) {
                 // --- 1. STARTBILDSCHIRM ZEICHNEN ---
                 DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Color{ 22, 24, 28, 255 });
-                DrawText("PRIMITIVE SANDBOX", SCREEN_WIDTH / 2 - 240, SCREEN_HEIGHT / 4, 46, GOLD);
-                DrawText("Stone Age Evolution & Survival", SCREEN_WIDTH / 2 - 180, SCREEN_HEIGHT / 4 + 60, 22, LIGHTGRAY);
+                DrawText("PRIMITIVE SANDBOX", (SCREEN_WIDTH - MeasureText("PRIMITIVE SANDBOX", 46)) / 2, SCREEN_HEIGHT / 4, 46, GOLD);
+                DrawText("Stone Age Evolution & Survival", (SCREEN_WIDTH - MeasureText("Stone Age Evolution & Survival", 22)) / 2, SCREEN_HEIGHT / 4 + 60, 22, LIGHTGRAY);
 
                 // Start-Button
                 bool hoverStart = CheckCollisionPointRec(mousePos, startButton);
@@ -276,6 +276,6 @@ int main() {
     }
 
     // Aufräumen & Beenden
-    renderMgr.Shutdown();
+    // Local objects release their textures before RenderManager closes OpenGL.
     return 0;
 }

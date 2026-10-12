@@ -1,4 +1,5 @@
 #include "camera.h"
+#include <algorithm>
 
 CameraController::CameraController(int screenWidth, int screenHeight, Vector2 focus, float zoom) {
     camera_ = Camera2D{};
@@ -18,7 +19,11 @@ void CameraController::Update(float deltaTime) {
 
     // 2. Ziehen mit mittlerer Maustaste
     if (IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) {
-        const Vector2 delta = Vector2Scale(GetMouseDelta(), -1.0f / camera_.zoom);
+        // raylib does not apply SetMouseScale() to GetMouseDelta().
+        const float displayScale = std::max(0.0001f, std::min(
+            (float)GetScreenWidth() / SCREEN_WIDTH,
+            (float)GetScreenHeight() / SCREEN_HEIGHT));
+        const Vector2 delta = Vector2Scale(GetMouseDelta(), -1.0f / (camera_.zoom * displayScale));
         camera_.target = Vector2Add(camera_.target, delta);
     }
 

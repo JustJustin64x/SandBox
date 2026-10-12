@@ -1,0 +1,21 @@
+{
+    "configurations": [
+        {
+            "name": "Windows",
+            "compilerPath": "g++.exe",
+            "intelliSenseMode": "windows-gcc-x64",
+            "cStandard": "c99",
+            "cppStandard": "c++17",
+            "includePath": [
+                "${workspaceFolder}/include",
+                "${workspaceFolder}/include/core",
+                "${workspaceFolder}/include/gfx",
+                "${workspaceFolder}/include/world",
+                "${workspaceFolder}/include/entities",
+                "${workspaceFolder}/include/civ",
+                "${workspaceFolder}/build/deps/raylib/src"
+            ]
+        }
+    ],
+    "version": 4
+}
