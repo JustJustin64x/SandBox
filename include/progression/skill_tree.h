@@ -27,10 +27,12 @@ struct TechNode {
     TechState state = TechState::Locked;
     std::vector<int> prereqIds;
 
-    // Koppelung an POI
+    // Koppelung an POI & Learning-by-Doing Praxis
     bool requiresPOI = false;
     POIType targetPOIType = POIType::LimestoneCave;
     RequiredGear gear;
+    float progress = 0.0f;          // 0.0 .. 100.0 (Learning by Doing / Forschungspraxis)
+    float requiredPractice = 100.0f;
 
     // UI-Layout (Spalte, Zeile auf dem Skilltree)
     int uiCol = 0;
@@ -47,6 +49,13 @@ public:
     bool IsUnlocked(const std::string& key) const;
     bool IsUnlocked(int id) const;
 
+    // Learning-by-Doing: Praxis-Fortschritt durch reale Aktionen hinzufügen.
+    // Gibt true zurück, wenn dadurch ein Heureka-Durchbruch ausgelöst wurde.
+    bool AddPractice(const std::string& key, float amount, EventLog& log, const std::string& actorName = "");
+
+    // Autonome Fokus-Wahl durch den Stamm anhand akuter Engpässe
+    void AutoSelectFocus(Era currentEra, bool coldUrgent, bool toolsUrgent);
+
     // Meilenstein-Prüfung für Epochenwechsel
     bool AreEraMilestonesCompleted(Era era) const;
     int GetMilestonesTotal(Era era) const;
@@ -59,18 +68,18 @@ public:
 
     const std::vector<TechNode>& AllNodes() const { return nodes_; }
 
-    // Spieler-Fokus / Priorisierung
+    // Spieler- oder KI-Fokus / Priorisierung
     void SetFocusNode(int id) { focusNodeId_ = id; }
     int GetFocusNode() const { return focusNodeId_; }
 
     // Abschluss einer Technologie
-    bool CompleteNode(int id, EventLog& log);
+    bool CompleteNode(int id, EventLog& log, const std::string& actorName = "");
 
     // Findet die fokussierte oder nächste erforschbare Technologie
     const TechNode* GetActiveOrNextDiscoverable(Era currentEra) const;
 
 private:
-    void RefreshNodeStates(const POIManager& pois);
+    void RefreshNodeStates(const POIManager& pois, EventLog& log);
 
     std::vector<TechNode> nodes_;
     int focusNodeId_ = -1;

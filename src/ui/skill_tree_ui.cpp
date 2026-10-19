@@ -4,6 +4,7 @@
 #include "poi.h"
 #include "age_manager.h"
 #include "config.h"
+#include "font_manager.h"
 
 #include <cmath>
 #include <algorithm>
@@ -20,12 +21,14 @@ Rectangle GetNodeRect(int nodeId, float boxX, float boxY) {
     float c2 = boxX + 1030.0f; // Eisenzeit
 
     switch (nodeId) {
-        // --- Steinzeit ---
-        case 1:  return { c0 + 20.0f,  boxY + 300.0f, nodeW, nodeH }; // Feuer
-        case 2:  return { c0 + 240.0f, boxY + 300.0f, nodeW, nodeH }; // Flint
-        case 3:  return { c0 + 20.0f,  boxY + 460.0f, nodeW, nodeH }; // Fackeln
-        case 4:  return { c0 + 240.0f, boxY + 460.0f, nodeW, nodeH }; // Höhlenkunde
-        case 5:  return { c0 + 240.0f, boxY + 160.0f, nodeW, nodeH }; // Megalith
+        // --- Steinzeit & Neolithikum ---
+        case 13: return { c0 + 20.0f,  boxY + 150.0f, nodeW, nodeH }; // Fellkleidung & Körbe
+        case 5:  return { c0 + 240.0f, boxY + 150.0f, nodeW, nodeH }; // Megalith
+        case 1:  return { c0 + 20.0f,  boxY + 265.0f, nodeW, nodeH }; // Feuer
+        case 2:  return { c0 + 240.0f, boxY + 265.0f, nodeW, nodeH }; // Flint
+        case 14: return { c0 + 240.0f, boxY + 380.0f, nodeW, nodeH }; // Ackerbau & Saatgut (Neolithikum)
+        case 3:  return { c0 + 20.0f,  boxY + 495.0f, nodeW, nodeH }; // Fackeln
+        case 4:  return { c0 + 240.0f, boxY + 495.0f, nodeW, nodeH }; // Höhlenkunde
 
         // --- Bronzezeit ---
         case 6:  return { c1 + 20.0f,  boxY + 160.0f, nodeW, nodeH }; // Zimmerei
@@ -100,47 +103,46 @@ void SkillTreeUI::Draw(const Tribe& tribe, Vector2 mousePos) const {
     DrawRectangleLinesEx(mainBox, 2.5f, Color{ 65, 80, 105, 255 });
 
     // 3. Titelzeile
-    DrawText("EVOLUTIONS- & FORSCHUNGSBAUM (SKILLTREE)", (int)boxX + 36, (int)boxY + 22, 26, GOLD);
-    DrawText("Entdecke die Geheimnisse der Erde durch gezielte Expeditionen und historisches Wissen",
-             (int)boxX + 36, (int)boxY + 54, 14, LIGHTGRAY);
+    FontManager::DrawTextShadow("EVOLUTIONS- & FORSCHUNGSBAUM (KAUSALE ZIVILISATIONSENTWICKLUNG)", boxX + 36.0f, boxY + 20.0f, 26.0f, GOLD);
+    FontManager::DrawTextShadow("Wissen entsteht organisch durch Alltagspraxis (Learning by Doing), Expeditionen und Heureka-Momente",
+                                boxX + 36.0f, boxY + 54.0f, 15.0f, LIGHTGRAY);
 
     // Schließen-Button
     Rectangle closeBtn = { boxX + boxW - 50.0f, boxY + 18.0f, 32.0f, 32.0f };
     bool hovClose = CheckCollisionPointRec(mousePos, closeBtn);
     DrawRectangleRec(closeBtn, hovClose ? RED : Color{ 50, 55, 65, 255 });
     DrawRectangleLinesEx(closeBtn, 1.5f, RAYWHITE);
-    DrawText("X", (int)closeBtn.x + 10, (int)closeBtn.y + 6, 20, RAYWHITE);
+    FontManager::DrawTextCenteredShadow("X", closeBtn.x + closeBtn.width * 0.5f, closeBtn.y + 4.0f, 22.0f, RAYWHITE);
 
-    // 4. Epochen-Statusleiste (Time-Gating & Meilensteine)
+    // 4. Kausale Epochen-Statusleiste (14-Stufen-Modell & Meilensteine)
     Era curEra = tribe.Age().CurrentEra();
-    float eraElapsed = tribe.Age().EraElapsedTime();
-    float reqTime = tribe.Age().RequiredEraDuration(curEra);
-    float eraPct = std::clamp(eraElapsed / reqTime, 0.0f, 1.0f);
-
+    HistoricalEpoch curEpoch = tribe.Age().CurrentEpoch();
     int doneMilestones = tribe.Skills().GetMilestonesCompleted(curEra);
-    int totalMilestones = tribe.Skills().GetMilestonesTotal(curEra);
+    int totalMilestones = std::max(1, tribe.Skills().GetMilestonesTotal(curEra));
+    float milestonePct = std::clamp((float)doneMilestones / (float)totalMilestones, 0.0f, 1.0f);
     bool canAdvance = tribe.Age().CanAdvance(tribe.Stock(), tribe.Buildings(), tribe.Skills(), 5);
 
-    // Fortschrittsbalken oben
-    int barX = (int)boxX + 680;
+    int barX = (int)boxX + 760;
     int barY = (int)boxY + 26;
     int barW = 340;
     int barH = 14;
 
-    DrawText(TextFormat("Epochenzeit: %.0f / %.0fs", eraElapsed, reqTime), barX, barY - 18, 13, RAYWHITE);
+    FontManager::DrawTextShadow(TextFormat("Epoche (%d/14): %s", HistoricalEpochNumber(curEpoch), HistoricalEpochName(curEpoch)),
+                                (float)barX, (float)(barY - 20), 15.0f, GOLD);
     DrawRectangle(barX, barY, barW, barH, Fade(GRAY, 0.3f));
-    DrawRectangle(barX, barY, (int)(barW * eraPct), barH, (eraPct >= 1.0f) ? LIME : SKYBLUE);
+    DrawRectangle(barX, barY, (int)(barW * milestonePct), barH, (milestonePct >= 1.0f) ? LIME : SKYBLUE);
     DrawRectangleLines(barX, barY, barW, barH, Fade(WHITE, 0.5f));
 
-    DrawText(TextFormat("Meilensteine: %d/%d", doneMilestones, totalMilestones), barX + barW + 18, barY - 2, 14,
-             (doneMilestones >= totalMilestones) ? LIME : GOLD);
+    FontManager::DrawTextShadow(TextFormat("Meilensteine: %d/%d", doneMilestones, totalMilestones),
+                                (float)(barX + barW + 18), (float)(barY - 3), 16.0f,
+                                (doneMilestones >= totalMilestones) ? LIME : GOLD);
 
     if (canAdvance) {
-        DrawText("EPOCHENWECHSEL BEREIT!", barX, barY + 22, 14, LIME);
+        FontManager::DrawTextShadow("KAUSALER EPOCHENWECHSEL BEREIT!", (float)barX, (float)(barY + 22), 15.0f, LIME);
     } else {
         std::string req;
         tribe.Age().CanAdvance(tribe.Stock(), tribe.Buildings(), tribe.Skills(), 5, &req);
-        DrawText(req.c_str(), barX, barY + 22, 12, Color{ 220, 180, 120, 255 });
+        FontManager::DrawTextShadow(req.c_str(), (float)barX, (float)(barY + 22), 14.0f, Color{ 220, 180, 120, 255 });
     }
 
     // 5. Trennlinien und Spalten-Header für Epochen
@@ -158,10 +160,10 @@ void SkillTreeUI::Draw(const Tribe& tribe, Vector2 mousePos) const {
 
         const char* eName = (i == 0) ? "1. STEINZEIT / URZEIT" :
                             (i == 1) ? "2. BRONZE- & WERKZEUGZEIT" : "3. SIEDLUNGS- & EISENZEIT";
-        DrawText(eName, (int)cx + 16, (int)headerRect.y + 11, 16, EraColor(colEra));
+        FontManager::DrawTextShadow(eName, cx + 16.0f, headerRect.y + 10.0f, 18.0f, EraColor(colEra));
 
         if (isCurrent) {
-            DrawText("[AKTIV]", (int)cx + (int)colWidth - 75, (int)headerRect.y + 12, 13, GOLD);
+            FontManager::DrawTextShadow("[AKTIV]", cx + colWidth - 85.0f, headerRect.y + 11.0f, 15.0f, GOLD);
         }
     }
 
@@ -187,8 +189,8 @@ void SkillTreeUI::Draw(const Tribe& tribe, Vector2 mousePos) const {
     }
 
     // Fußzeile
-    DrawText("Tipp: Klicke auf eine erforschbare Technologie, um sie als aktives Expeditionsziel zu priorisieren! | [K] Schließen",
-             (int)boxX + 36, (int)boxY + boxH - 32, 13, LIGHTGRAY);
+    FontManager::DrawTextShadow("Tipp: Klicke auf eine erforschbare Technologie, um sie als aktives Stammesziel zu priorisieren! | [K] Schließen",
+                                boxX + 36.0f, boxY + boxH - 32.0f, 15.0f, LIGHTGRAY);
 }
 
 void SkillTreeUI::DrawConnectionLines(const SkillTree& skills, Rectangle eraBounds[3]) const {
@@ -266,35 +268,45 @@ void SkillTreeUI::DrawNodeCard(const TechNode& node, Rectangle rect, bool isHove
 
     // Name
     Color nameCol = (node.state == TechState::Locked) ? GRAY : RAYWHITE;
-    DrawText(node.name.c_str(), (int)rect.x + 10, (int)rect.y + 10, 14, nameCol);
+    FontManager::DrawTextShadow(node.name.c_str(), rect.x + 10.0f, rect.y + 8.0f, 15.0f, nameCol);
 
-    // Status-Badge
+    // Status-Badge + Praxis-Prozent
     const char* statusTxt = (node.state == TechState::Locked) ? "Gesperrt" :
-                            (node.state == TechState::Ready) ? "Bereit" :
+                            (node.state == TechState::Ready) ? TextFormat("Praxis: %.0f%%", node.progress) :
                             (node.state == TechState::InExpedition) ? "Expedition..." : "Gemeistert";
     Color statusCol = (node.state == TechState::Locked) ? DARKGRAY :
                       (node.state == TechState::Ready) ? SKYBLUE :
                       (node.state == TechState::InExpedition) ? GOLD : LIME;
 
-    DrawText(statusTxt, (int)rect.x + 10, (int)rect.y + 32, 12, statusCol);
+    FontManager::DrawTextShadow(statusTxt, rect.x + 10.0f, rect.y + 28.0f, 13.0f, statusCol);
+
+    // Kleiner Fortschrittsbalken für Learning-by-Doing
+    if (node.state != TechState::Mastered && node.progress > 0.5f) {
+        float pct = std::clamp(node.progress / std::max(1.0f, node.requiredPractice), 0.0f, 1.0f);
+        int pBarX = (int)rect.x + 110;
+        int pBarY = (int)rect.y + 32;
+        int pBarW = (int)rect.width - 120;
+        DrawRectangle(pBarX, pBarY, pBarW, 6, Fade(BLACK, 0.5f));
+        DrawRectangle(pBarX, pBarY, (int)(pBarW * pct), 6, (node.state == TechState::Ready) ? SKYBLUE : GOLD);
+    }
 
     // Meilenstein-Kennzeichnung
     if (node.isMilestone) {
-        DrawText("* MEILENSTEIN", (int)rect.x + 10, (int)rect.y + 52, 11, GOLD);
+        FontManager::DrawTextShadow("* MEILENSTEIN", rect.x + 10.0f, rect.y + 50.0f, 12.0f, GOLD);
     } else {
-        DrawText(EraName(node.era), (int)rect.x + 10, (int)rect.y + 52, 11, Fade(GRAY, 0.7f));
+        FontManager::DrawTextShadow(EraName(node.era), rect.x + 10.0f, rect.y + 50.0f, 12.0f, Fade(GRAY, 0.8f));
     }
 
     // Fokus-Ring
     if (isFocused) {
         DrawRectangleLinesEx(rect, 2.5f, GOLD);
-        DrawText("FOKUS", (int)rect.x + (int)rect.width - 50, (int)rect.y + 10, 11, GOLD);
+        FontManager::DrawTextShadow("FOKUS", rect.x + rect.width - 55.0f, rect.y + 8.0f, 12.0f, GOLD);
     }
 }
 
 void SkillTreeUI::DrawTooltip(const TechNode& node, const POIManager& pois, Vector2 mousePos) const {
-    float tipW = 340.0f;
-    float tipH = 210.0f;
+    float tipW = 380.0f;
+    float tipH = 225.0f;
     float tipX = mousePos.x + 16.0f;
     float tipY = mousePos.y + 16.0f;
 
@@ -303,36 +315,36 @@ void SkillTreeUI::DrawTooltip(const TechNode& node, const POIManager& pois, Vect
     if (tipY + tipH > SCREEN_HEIGHT - 20) tipY = mousePos.y - tipH - 16.0f;
 
     Rectangle r = { tipX, tipY, tipW, tipH };
-    DrawRectangleRec(r, Color{ 16, 18, 24, 250 });
+    DrawRectangleRec(r, Color{ 16, 18, 24, 252 });
     DrawRectangleLinesEx(r, 1.8f, GOLD);
 
-    DrawText(node.name.c_str(), (int)tipX + 14, (int)tipY + 12, 17, RAYWHITE);
-    DrawText(TextFormat("Epoche: %s", EraName(node.era)), (int)tipX + 14, (int)tipY + 34, 12, EraColor(node.era));
+    FontManager::DrawTextShadow(node.name.c_str(), tipX + 14.0f, tipY + 10.0f, 19.0f, RAYWHITE);
+    FontManager::DrawTextShadow(TextFormat("Epoche: %s", EraName(node.era)), tipX + 14.0f, tipY + 34.0f, 14.0f, EraColor(node.era));
 
     // Beschreibung
-    DrawText(node.description.c_str(), (int)tipX + 14, (int)tipY + 54, 11, LIGHTGRAY);
+    FontManager::DrawTextShadow(node.description.c_str(), tipX + 14.0f, tipY + 54.0f, 13.0f, LIGHTGRAY);
 
     // Nutzen
-    DrawLine((int)tipX + 10, (int)tipY + 104, (int)tipX + (int)tipW - 10, (int)tipY + 104, Fade(GRAY, 0.4f));
-    DrawText(TextFormat("Effekt: %s", node.benefit.c_str()), (int)tipX + 14, (int)tipY + 112, 12, LIME);
+    DrawLine((int)tipX + 10, (int)tipY + 108, (int)tipX + (int)tipW - 10, (int)tipY + 108, Fade(GRAY, 0.4f));
+    FontManager::DrawTextShadow(TextFormat("Effekt: %s", node.benefit.c_str()), tipX + 14.0f, tipY + 116.0f, 14.0f, LIME);
 
     // Koppelung an Ort & Ausrüstung
     if (node.requiresPOI) {
         const auto* poi = pois.GetByType(node.targetPOIType);
         std::string poiName = poi ? poi->name : "Unbekannt";
-        DrawText(TextFormat("Erkundungsort: %s", poiName.c_str()), (int)tipX + 14, (int)tipY + 138, 12, SKYBLUE);
+        FontManager::DrawTextShadow(TextFormat("Erkundungsort: %s", poiName.c_str()), tipX + 14.0f, tipY + 142.0f, 13.0f, SKYBLUE);
 
         std::string gearStr = "Ausrüstung: ";
         if (node.gear.torch) gearStr += "[Fackel] ";
         if (node.gear.pickaxe) gearStr += "[Spitzhacke] ";
         if (node.gear.provisions) gearStr += "[Proviant] ";
-        DrawText(gearStr.c_str(), (int)tipX + 14, (int)tipY + 158, 11, ORANGE);
+        FontManager::DrawTextShadow(gearStr.c_str(), tipX + 14.0f, tipY + 164.0f, 13.0f, ORANGE);
     } else {
-        DrawText("Erforschung: Durch Stammeswerkbank & Erfahrung", (int)tipX + 14, (int)tipY + 138, 11, LIGHTGRAY);
+        FontManager::DrawTextShadow("Erforschung: Durch Stammeswerkbank & Alltagspraxis", tipX + 14.0f, tipY + 142.0f, 13.0f, LIGHTGRAY);
     }
 
     if (node.state == TechState::Ready) {
-        DrawText("Klick: Als Expeditions-Fokus setzen", (int)tipX + 14, (int)tipY + 184, 11, GOLD);
+        FontManager::DrawTextShadow("Klick: Als Stammes-Fokus priorisieren", tipX + 14.0f, tipY + 192.0f, 13.0f, GOLD);
     }
 }
 

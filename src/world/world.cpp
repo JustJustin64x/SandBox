@@ -1,4 +1,5 @@
 #include "world/world.h"
+#include "world/environmental_system.h"
 
 #include <algorithm>
 #include <queue>
@@ -60,11 +61,15 @@ constexpr float kSqrt2             = 1.41421356f;
 // ============================================================================
 World::World(int width, int height, unsigned int seed)
     : width_(std::max(8, width)), height_(std::max(8, height)),
-      tiles_((size_t)(std::max(8, width) * std::max(8, height)), TILE_DEEP_WATER) {
+      tiles_((size_t)(std::max(8, width) * std::max(8, height)), TILE_DEEP_WATER),
+      footTraffic_((size_t)(std::max(8, width) * std::max(8, height)), 0.0f),
+      pavedRoad_((size_t)(std::max(8, width) * std::max(8, height)), 0) {
     Generate(seed);
 }
 
 void World::Generate(unsigned int seed) {
+    std::fill(footTraffic_.begin(), footTraffic_.end(), 0.0f);
+    std::fill(pavedRoad_.begin(), pavedRoad_.end(), 0);
     const float cx = (float)width_ * 0.5f;
     const float cy = (float)height_ * 0.5f;
 
@@ -131,7 +136,10 @@ void World::SetTile(int x, int y, TileType type) {
 }
 
 bool World::IsWalkableTile(int x, int y) const {
-    return IsInBounds(x, y) && GetProperty(GetTile(x, y)).isWalkable;
+    if (!IsInBounds(x, y)) return false;
+    if (GetProperty(GetTile(x, y)).isWalkable) return true;
+    if (env_ && env_->GetState(x, y).frozen && !env_->IsTileDangerous(x, y)) return true;
+    return false;
 }
 
 bool World::IsWalkable(Vector2 worldPos) const {
@@ -160,6 +168,7 @@ bool World::FindRandomWalkablePosition(Vector2 center, float radiusPx, Vector2& 
         const Vector2 p = { center.x + std::cos(angle) * r, center.y + std::sin(angle) * r };
         const int tx = ToTile(p.x), ty = ToTile(p.y);
         if (!IsWalkableTile(tx, ty)) continue;
+        if (env_ && env_->IsTileDangerous(tx, ty)) continue;
         if (requiredType != TILE_TYPE_COUNT && GetTile(tx, ty) != requiredType) continue;
         out = p;
         return true;
@@ -180,7 +189,7 @@ bool World::FindRandomTile(const std::function<bool(int, int)>& predicate, Vecto
 }
 
 bool World::FindNearestWalkableTile(int tx, int ty, int maxRadius, int& outX, int& outY) const {
-    if (IsWalkableTile(tx, ty)) { outX = tx; outY = ty; return true; }
+    if (IsWalkableTile(tx, ty) && (!env_ || !env_->IsTileDangerous(tx, ty))) { outX = tx; outY = ty; return true; }
     for (int r = 1; r <= maxRadius; ++r) {
         int bestDist = 1 << 30;
         bool found = false;
@@ -188,6 +197,7 @@ bool World::FindNearestWalkableTile(int tx, int ty, int maxRadius, int& outX, in
             for (int x = tx - r; x <= tx + r; ++x) {
                 if (std::abs(x - tx) != r && std::abs(y - ty) != r) continue;   // nur Ring
                 if (!IsWalkableTile(x, y)) continue;
+                if (env_ && env_->IsTileDangerous(x, y)) continue;
                 const int d = (x - tx) * (x - tx) + (y - ty) * (y - ty);
                 if (d < bestDist) { bestDist = d; outX = x; outY = y; found = true; }
             }
@@ -198,6 +208,53 @@ bool World::FindNearestWalkableTile(int tx, int ty, int maxRadius, int& outX, in
 }
 
 // ============================================================================
+//  Dynamische Wege (Trampelpfade & Gepflasterte Straßen)
+// ============================================================================
+void World::AddFootTraffic(int tx, int ty, float amount, bool canPave) {
+    if (!IsInBounds(tx, ty)) return;
+    TileType t = GetTile(tx, ty);
+    if (t != TILE_GRASS && t != TILE_FOREST && t != TILE_SAND) return;
+
+    const size_t idx = (size_t)(ty * width_ + tx);
+    footTraffic_[idx] = std::min(100.0f, footTraffic_[idx] + amount);
+    if (canPave && footTraffic_[idx] >= 78.0f) {
+        pavedRoad_[idx] = 1;
+    }
+}
+
+float World::GetFootTraffic(int tx, int ty) const {
+    if (!IsInBounds(tx, ty)) return 0.0f;
+    return footTraffic_[(size_t)(ty * width_ + tx)];
+}
+
+bool World::IsPavedRoad(int tx, int ty) const {
+    if (!IsInBounds(tx, ty)) return false;
+    return pavedRoad_[(size_t)(ty * width_ + tx)] != 0;
+}
+
+float World::GetRoadSpeedMultiplier(Vector2 worldPos) const {
+    const int tx = ToTile(worldPos.x);
+    const int ty = ToTile(worldPos.y);
+    if (!IsInBounds(tx, ty)) return 1.0f;
+    const size_t idx = (size_t)(ty * width_ + tx);
+    if (pavedRoad_[idx]) return 1.25f;              // Gepflasterte Straße: +25% Tempo
+    if (footTraffic_[idx] >= 35.0f) return 1.12f;   // Ausgetretener Trampelpfad: +12% Tempo
+    if (footTraffic_[idx] >= 15.0f) return 1.05f;   // Plattgetretenes Gras: +5% Tempo
+    return 1.0f;
+}
+
+void World::UpdateRoads(float dt) {
+    const float decay = 0.08f * dt;
+    const size_t n = footTraffic_.size();
+    for (size_t i = 0; i < n; ++i) {
+        if (pavedRoad_[i] || footTraffic_[i] <= 0.0f) continue;
+        // Wenig genutzte Pfade wachsen langsam wieder zu; Hauptwege bleiben stabiler
+        float rate = (footTraffic_[i] > 55.0f) ? (decay * 0.25f) : decay;
+        footTraffic_[i] = std::max(0.0f, footTraffic_[i] - rate);
+    }
+}
+
+// ============================================================================
 //  Pfadsuche
 // ============================================================================
 bool World::HasLineOfSight(Vector2 a, Vector2 b) const {
@@ -205,7 +262,9 @@ bool World::HasLineOfSight(Vector2 a, Vector2 b) const {
     const int steps = std::max(1, (int)(dist / 2.0f));
     for (int i = 0; i <= steps; ++i) {
         const Vector2 p = Vector2Lerp(a, b, (float)i / (float)steps);
-        if (!IsWalkable(p)) return false;
+        const int tx = ToTile(p.x), ty = ToTile(p.y);
+        if (!IsWalkableTile(tx, ty)) return false;
+        if (env_ && env_->IsTileDangerous(tx, ty)) return false;
     }
     return true;
 }
@@ -217,8 +276,8 @@ bool World::FindPath(Vector2 from, Vector2 to, std::vector<Vector2>& outPath) co
     int gx = ToTile(to.x), gy = ToTile(to.y);
     if (!IsInBounds(sx, sy)) return false;
 
-    const bool targetWalkable = IsWalkableTile(gx, gy);
-    if (!targetWalkable && !FindNearestWalkableTile(gx, gy, 4, gx, gy)) return false;
+    const bool targetWalkable = IsWalkableTile(gx, gy) && (!env_ || !env_->IsTileDangerous(gx, gy));
+    if (!targetWalkable && !FindNearestWalkableTile(gx, gy, 5, gx, gy)) return false;
     const Vector2 finalPoint = targetWalkable ? to : TileCenter(gx, gy);
 
     if (sx == gx && sy == gy) {
@@ -281,7 +340,10 @@ bool World::FindPath(Vector2 from, Vector2 to, std::vector<Vector2>& outPath) co
             const int ni = ny * width_ + nx;
             if (closedStamp_[(size_t)ni] == stamp_) continue;
 
-            const float g = gScore_[(size_t)current] + kCost[k];
+            const float envCost = env_ ? env_->GetTileTraversalCost(nx, ny) : 1.0f;
+            const float roadFactor = pavedRoad_[(size_t)ni] ? 0.78f
+                                   : (footTraffic_[(size_t)ni] >= 35.0f ? 0.88f : 1.0f);
+            const float g = gScore_[(size_t)current] + kCost[k] * envCost * roadFactor;
             if (openStamp_[(size_t)ni] != stamp_ || g < gScore_[(size_t)ni]) {
                 openStamp_[(size_t)ni] = stamp_;
                 gScore_[(size_t)ni] = g;
@@ -334,7 +396,23 @@ void World::Draw(const Camera2D& camera) const {
             c.r = (unsigned char)Clamp((float)c.r + (float)shade, 0.0f, 255.0f);
             c.g = (unsigned char)Clamp((float)c.g + (float)shade, 0.0f, 255.0f);
             c.b = (unsigned char)Clamp((float)c.b + (float)shade, 0.0f, 255.0f);
-            DrawRectangle(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE, c);
+            const int px = x * TILE_SIZE;
+            const int py = y * TILE_SIZE;
+            DrawRectangle(px, py, TILE_SIZE, TILE_SIZE, c);
+
+            // Dynamische Trampelpfade & gepflasterte Straßen auf dem Boden
+            const size_t idx = (size_t)(y * width_ + x);
+            if (pavedRoad_[idx]) {
+                DrawRectangle(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2, Color{ 146, 142, 134, 235 });
+                DrawRectangle(px + 3, py + 3, 3, 3, Color{ 118, 114, 106, 220 });
+                DrawRectangle(px + TILE_SIZE - 5, py + TILE_SIZE - 5, 3, 3, Color{ 168, 164, 156, 220 });
+            } else if (footTraffic_[idx] >= 35.0f) {
+                unsigned char alpha = (unsigned char)Clamp(125.0f + footTraffic_[idx] * 0.9f, 135.0f, 220.0f);
+                DrawRectangle(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2, Color{ 138, 108, 72, alpha });
+                DrawRectangle(px + 4, py + 5, 2, 2, Color{ 112, 86, 56, alpha });
+            } else if (footTraffic_[idx] >= 15.0f) {
+                DrawRectangle(px + 2, py + 2, TILE_SIZE - 4, TILE_SIZE - 4, Color{ 126, 138, 74, 95 });
+            }
         }
     }
 

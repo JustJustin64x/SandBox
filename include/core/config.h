@@ -105,7 +105,7 @@ constexpr float kCraftDuration            = 3.5f;   // Sekunden pro Balken / Zie
 constexpr float kApCostCraft              = 3.5f;
 
 // --- Tag-Nacht-Zyklus -------------------------------------------------------
-constexpr float kDayCycleDuration         = 120.0f; // Sekunden für vollen Tag-Nacht-Zyklus
+constexpr float kDayCycleDuration         = 240.0f; // Sekunden für vollen Tag-Nacht-Zyklus
 
 // --- Historisch skalierte Zeitalter-Dauer (Time-Gating) ----------------------
 // Reale Epochen skaliert: Steinzeit am längsten (3 Min), Bronzezeit (2.5 Min), Eisenzeit (2 Min).

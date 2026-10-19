@@ -35,10 +35,14 @@ struct ResourceNode {
     bool facingLeft = false;
     float animTime = 0.0f;
 
+    // Umwelt-Zustände (Phase 1)
+    bool charred = false;      // Durch Feuer verkohlter Baumstumpf / verbrannter Busch
+    float panicTimer = 0.0f;   // > 0: Wildtier flieht panisch vor Feuer/Strom
+
     int claims = 0;            // Anzahl Steinzeitmenschen, die dieses Objekt ansteuern
     unsigned int generation = 0;  // ändert sich bei Tod/Respawn (ungültige Ziele erkennen)
 
-    bool IsAvailable() const { return alive && amount > 0; }
+    bool IsAvailable() const { return alive && amount > 0 && !charred; }
 };
 
 // Verwaltet alle Ressourcen-Objekte: Platzierung, Nachwachsen, Tier-KI, Zeichnen.
@@ -64,6 +68,7 @@ public:
 
     int CountAvailable(ResourceType type) const;
     const std::vector<ResourceNode>& Nodes() const { return nodes_; }
+    std::vector<ResourceNode>& NodesMutable() { return nodes_; }
 
 private:
     void SpawnNode(ResourceType type, Vector2 position);

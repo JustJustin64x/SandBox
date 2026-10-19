@@ -9,6 +9,7 @@
 #include "poi.h"
 #include "skill_tree.h"
 #include "config.h"
+#include "world/environmental_system.h"
 
 #include <cmath>
 #include <algorithm>
@@ -24,6 +25,15 @@ UtilityDecision UtilityAI::Evaluate(const Caveman& agent, const WorldContext& ct
     UtilityDecision best;
     best.state = CavemanState::Idle;
     best.score = -1.0f;
+
+    // 0. Panik / Flucht vor Feuer & Strom (höchste Überlebenspriorität)
+    {
+        std::string reason;
+        float score = ScoreFlee(agent, ctx, reason);
+        if (score > best.score) {
+            best = { CavemanState::Fleeing, ResourceType::Bush, -1, -1, -1, score, reason };
+        }
+    }
 
     // 1. Essen
     {
@@ -44,7 +54,7 @@ UtilityDecision UtilityAI::Evaluate(const Caveman& agent, const WorldContext& ct
         }
     }
 
-    // 3. Aufwärmen (bei Nacht / Kälte)
+    // 3. Aufwärmen / Schutz bei Sturm & Kälte
     {
         int shelterId = -1;
         std::string reason;
@@ -104,7 +114,30 @@ UtilityDecision UtilityAI::Evaluate(const Caveman& agent, const WorldContext& ct
         }
     }
 
-    // 8. Nahrung sammeln (Beeren)
+    // 8a. Neolithische Landwirtschaft & Tierzucht (Ackerfeld & Tiergehege bestellen/ernten)
+    {
+        int farmId = ctx.tribe.Buildings().FindFarmOrPenNeedingWork(agent.Position());
+        if (farmId >= 0 && agent.GetRole() != Role::Child) {
+            if (const Building* b = ctx.tribe.Buildings().Get(farmId)) {
+                float roleAff = (agent.GetRole() == Role::Gatherer || agent.GetRole() == Role::Elder) ? 1.25f : 0.90f;
+                float dist = DistanceFactor(agent.Position(), b->position);
+                float basePrio = b->IsHarvestReady() ? 0.86f : 0.68f;
+                float farmScore = std::clamp(basePrio * roleAff * dist, 0.0f, 0.93f);
+                if (farmScore > best.score) {
+                    std::string farmReason = (b->type == BuildingType::FarmPlot)
+                        ? (b->IsHarvestReady()
+                            ? TextFormat("Getreide ernten! (Score: %.2f)", farmScore)
+                            : TextFormat("Ackerfeld bestellen (Score: %.2f)", farmScore))
+                        : (b->IsHarvestReady()
+                            ? TextFormat("Tiergehege versorgen & scheren (Score: %.2f)", farmScore)
+                            : TextFormat("Herde füttern (Score: %.2f)", farmScore));
+                    best = { CavemanState::GatheringFood, ResourceType::Bush, farmId, -1, -1, farmScore, farmReason };
+                }
+            }
+        }
+    }
+
+    // 8b. Nahrung sammeln (Wildbeeren)
     {
         int nodeId = -1;
         std::string reason;
@@ -150,9 +183,19 @@ UtilityDecision UtilityAI::Evaluate(const Caveman& agent, const WorldContext& ct
 //  Einzelbewertungen
 // ============================================================================
 
+float UtilityAI::ScoreFlee(const Caveman& agent, const WorldContext& ctx, std::string& outReason) {
+    if (!ctx.env) return 0.0f;
+    Vector2 hazardCenter = { 0.0f, 0.0f };
+    if (ctx.env->IsHazardNear(agent.Position(), 36.0f, hazardCenter)) {
+        outReason = "PANIK: Flucht vor Feuer/Starkstrom! (Score: 1.95)";
+        return 1.95f;
+    }
+    return 0.0f;
+}
+
 float UtilityAI::ScoreEat(const Caveman& agent, const WorldContext& ctx, std::string& outReason) {
     const Stockpile& stock = ctx.tribe.Stock();
-    if (stock.food <= 0) return 0.0f;
+    if (stock.food <= 0 && stock.cookedFood <= 0) return 0.0f;
 
     float hunger = agent.Hunger();
     if (hunger < 25.0f) return 0.0f;
@@ -163,7 +206,9 @@ float UtilityAI::ScoreEat(const Caveman& agent, const WorldContext& ctx, std::st
     float dist = DistanceFactor(agent.Position(), ctx.tribe.StockpilePosition());
     float score = std::clamp(urgency * 1.3f * dist, 0.0f, 1.0f);
 
-    outReason = TextFormat("Essen (Score: %.2f - Hunger bei %.0f%%)", score, hunger);
+    outReason = (stock.cookedFood > 0)
+        ? TextFormat("Warme Mahlzeit essen (Score: %.2f - Hunger %.0f%%)", score, hunger)
+        : TextFormat("Rohkost essen (Score: %.2f - Hunger %.0f%%)", score, hunger);
     return score;
 }
 
@@ -179,6 +224,9 @@ float UtilityAI::ScoreSleep(const Caveman& agent, const WorldContext& ctx, int& 
 
     outHutId = ctx.tribe.Buildings().FindBestShelter(agent.Position());
     float shelterBonus = (outHutId >= 0) ? 1.15f : 0.85f;
+    if (ctx.env && (ctx.env->GetWeather() == WeatherType::Storm || ctx.env->GetWeather() == WeatherType::Rain)) {
+        shelterBonus *= 1.18f;
+    }
 
     if (agent.Hunger() >= cfg::kHungerCritical) urgency *= 0.3f;
 
@@ -188,18 +236,70 @@ float UtilityAI::ScoreSleep(const Caveman& agent, const WorldContext& ctx, int& 
 }
 
 float UtilityAI::ScoreWarmUp(const Caveman& agent, const WorldContext& ctx, int& outShelterId, std::string& outReason) {
+    const Stockpile& stock = ctx.tribe.Stock();
+
+    // 1. Feuerhüten (TendFire): Wenn Lagerfeuer oder Ofen fast erloschen ist und Holz im Lager liegt
+    int fireNeedingFuel = ctx.tribe.Buildings().FindFireNeedingFuel(agent.Position());
+    if (fireNeedingFuel >= 0 && stock.wood >= 1 && agent.GetRole() != Role::Child) {
+        if (const Building* fire = ctx.tribe.Buildings().Get(fireNeedingFuel)) {
+            float dist = DistanceFactor(agent.Position(), fire->position);
+            float basePrio = (fire->fuel <= 0.0f) ? 0.94f : 0.82f;
+            if (agent.GetRole() == Role::Elder) basePrio += 0.05f;
+            float score = std::clamp(basePrio * dist, 0.0f, 0.96f);
+            outShelterId = fireNeedingFuel;
+            outReason = (fire->fuel <= 0.0f)
+                ? TextFormat("Feuer neu entzünden! (Score: %.2f)", score)
+                : TextFormat("Brennholz nachlegen (Score: %.2f - %d%% Glut)", score, (int)fire->fuel);
+            return score;
+        }
+    }
+
+    // 2. Kochen am Lagerfeuer (CookFood): Älteste & Sammler braten rohe Vorräte zu warmen Mahlzeiten
+    if ((agent.GetRole() == Role::Elder || agent.GetRole() == Role::Gatherer) &&
+        stock.food >= 2 && stock.cookedFood < std::max(4, ctx.population)) {
+        outShelterId = ctx.tribe.Buildings().FindBestShelter(agent.Position());
+        Vector2 targetPos = (outShelterId >= 0) ? ctx.tribe.Buildings().Get(outShelterId)->position : ctx.tribe.CampPosition();
+        if (ctx.tribe.Buildings().GetWarmthAt(targetPos) > 0.0f) {
+            float dist = DistanceFactor(agent.Position(), targetPos);
+            float cookScore = std::clamp(((agent.GetRole() == Role::Elder) ? 0.74f : 0.60f) * dist, 0.0f, 0.80f);
+            if (agent.Warmth() > 60.0f) {
+                outReason = TextFormat("Am Feuer kochen (Score: %.2f)", cookScore);
+                return cookScore;
+            }
+        }
+    }
+
+    // 2b. Spirituelle Andacht am Monument oder Ahnengrab, wenn die Moral sinkt (Meilenstein E)
+    if (agent.Morale() < 55.0f && agent.Warmth() > 55.0f) {
+        int monId = ctx.tribe.Buildings().FindMonumentOrGrave(agent.Position());
+        if (monId >= 0) {
+            if (const Building* mon = ctx.tribe.Buildings().Get(monId)) {
+                float dist = DistanceFactor(agent.Position(), mon->position);
+                float monScore = std::clamp((0.76f + (55.0f - agent.Morale()) * 0.004f) * dist, 0.0f, 0.85f);
+                outShelterId = monId;
+                outReason = TextFormat("Andacht an %s (Score: %.2f)", mon->DisplayName().c_str(), monScore);
+                return monScore;
+            }
+        }
+    }
+
+    // 3. Eigenes Aufwärmen & Schutz bei Sturm / Kälte
     float warmth = agent.Warmth();
-    if (warmth > 60.0f) return 0.0f;
+    bool badWeather = ctx.env && (ctx.env->GetWeather() == WeatherType::Storm || ctx.env->GetWeather() == WeatherType::Rain);
+    float threshold = badWeather ? 72.0f : 60.0f;
+    if (warmth > threshold) return 0.0f;
 
     float coldness = (100.0f - warmth) / 100.0f;
-    float urgency = std::pow(coldness, 2.0f);
+    float urgency = std::pow(coldness, 1.85f) + (badWeather ? 0.18f : 0.0f);
 
     outShelterId = ctx.tribe.Buildings().FindBestShelter(agent.Position());
     Vector2 targetPos = (outShelterId >= 0) ? ctx.tribe.Buildings().Get(outShelterId)->position : ctx.tribe.CampPosition();
     float dist = DistanceFactor(agent.Position(), targetPos);
 
     float score = std::clamp(urgency * 1.25f * dist, 0.0f, 0.99f);
-    outReason = TextFormat("Aufwärmen (Score: %.2f - Wärme nur %.0f%%)", score, warmth);
+    outReason = badWeather
+        ? TextFormat("Schutz vor Unwetter & Kälte (Score: %.2f - Wärme %.0f%%)", score, warmth)
+        : TextFormat("Aufwärmen (Score: %.2f - Wärme nur %.0f%%)", score, warmth);
     return score;
 }
 
@@ -256,9 +356,10 @@ float UtilityAI::ScoreGatherFood(const Caveman& agent, const WorldContext& ctx, 
     if (!node) return 0.0f;
 
     const Stockpile& stock = ctx.tribe.Stock();
+    int totalFood = stock.food + stock.cookedFood;
     int reserveTarget = ctx.population * cfg::kFoodReservePerMember;
-    float colonyNeed = (stock.food < reserveTarget) ?
-        (float)(reserveTarget - stock.food) / (float)reserveTarget : 0.1f;
+    float colonyNeed = (totalFood < reserveTarget) ?
+        (float)(reserveTarget - totalFood) / (float)reserveTarget : 0.1f;
 
     float personalNeed = agent.Hunger() / 100.0f;
     float roleAffinity = (agent.GetRole() == Role::Gatherer) ? 1.4f :
@@ -267,7 +368,7 @@ float UtilityAI::ScoreGatherFood(const Caveman& agent, const WorldContext& ctx, 
     float dist = DistanceFactor(agent.Position(), node->position);
     float score = std::clamp((colonyNeed * 0.6f + personalNeed * 0.4f) * roleAffinity * dist, 0.0f, 0.92f);
 
-    outReason = TextFormat("Beeren sammeln (Score: %.2f - Vorrat: %d/%d)", score, stock.food, reserveTarget);
+    outReason = TextFormat("Beeren sammeln (Score: %.2f - Vorrat: %d/%d)", score, totalFood, reserveTarget);
     return score;
 }
 
@@ -282,15 +383,21 @@ float UtilityAI::ScoreHunt(const Caveman& agent, const WorldContext& ctx, int& o
     if (!node) return 0.0f;
 
     const Stockpile& stock = ctx.tribe.Stock();
+    int totalFood = stock.food + stock.cookedFood;
     int reserveTarget = ctx.population * cfg::kFoodReservePerMember;
-    float colonyNeed = (stock.food < reserveTarget) ?
-        (float)(reserveTarget - stock.food) / (float)reserveTarget : 0.15f;
+    float colonyNeed = (totalFood < reserveTarget) ?
+        (float)(reserveTarget - totalFood) / (float)reserveTarget : 0.15f;
+
+    // Zusätzlicher Jagd-Anreiz, wenn Felle für Kleidung fehlen
+    if (stock.hides < 3 && agent.GetClothing() == ClothingTier::None) {
+        colonyNeed = std::max(colonyNeed, 0.55f);
+    }
 
     float roleAffinity = (agent.GetRole() == Role::Hunter) ? 1.5f : 0.7f;
     float dist = DistanceFactor(agent.Position(), node->position);
 
     float score = std::clamp(colonyNeed * 1.1f * roleAffinity * dist, 0.0f, 0.95f);
-    outReason = TextFormat("Jagen (Score: %.2f - Fleischbedarf)", score);
+    outReason = TextFormat("Jagen (Score: %.2f - Fleisch & Fell)", score);
     return score;
 }
 
@@ -302,18 +409,28 @@ float UtilityAI::ScoreGatherWood(const Caveman& agent, const WorldContext& ctx, 
     if (!node) return 0.0f;
 
     const Stockpile& stock = ctx.tribe.Stock();
+    ResourceCost deficit = ctx.tribe.GetPlannedResourceDeficit();
     bool needsHuts = ctx.tribe.NeedsMoreHuts(ctx.population);
     bool hasSite = ctx.tribe.Buildings().FindActiveConstructionSite(agent.Position()) >= 0;
+    bool fireNeedsWood = (ctx.tribe.Buildings().FindFireNeedingFuel(agent.Position()) >= 0 && stock.wood < 3);
 
     float need = 0.15f;
-    if (hasSite || needsHuts) need += 0.5f;
+    if (fireNeedsWood) need += 0.65f;
+    else if (deficit.wood > 0 || deficit.planks > 0) need += 0.58f;
+    else if (hasSite || needsHuts) need += 0.48f;
     if (stock.wood < 8) need += 0.3f;
 
     float dist = DistanceFactor(agent.Position(), node->position);
-    float roleAffinity = (agent.GetRole() == Role::Gatherer || agent.GetRole() == Role::Elder) ? 1.2f : 0.9f;
+    float roleAffinity = (agent.GetRole() == Role::Gatherer || agent.GetRole() == Role::Elder) ? 1.25f : 0.95f;
 
-    float score = std::clamp(need * roleAffinity * dist, 0.0f, 0.88f);
-    outReason = TextFormat("Holzhacken (Score: %.2f - Holz: %d)", score, stock.wood);
+    float score = std::clamp(need * roleAffinity * dist, 0.0f, 0.92f);
+    if (fireNeedsWood) {
+        outReason = TextFormat("Brennholz für Lagerfeuer holen! (Score: %.2f)", score);
+    } else if (deficit.wood > 0) {
+        outReason = TextFormat("Holzhacken für %s (Score: %.2f)", ctx.tribe.CurrentPlan().description.c_str(), score);
+    } else {
+        outReason = TextFormat("Holzhacken (Score: %.2f - Holz: %d)", score, stock.wood);
+    }
     return score;
 }
 
@@ -325,18 +442,26 @@ float UtilityAI::ScoreGatherStone(const Caveman& agent, const WorldContext& ctx,
     if (!node) return 0.0f;
 
     const Stockpile& stock = ctx.tribe.Stock();
+    ResourceCost deficit = ctx.tribe.GetPlannedResourceDeficit();
     bool needsHuts = ctx.tribe.NeedsMoreHuts(ctx.population);
     bool hasSite = ctx.tribe.Buildings().FindActiveConstructionSite(agent.Position()) >= 0;
 
-    float need = 0.1f;
-    if (hasSite || needsHuts) need += 0.45f;
+    float need = 0.14f;
+    if (deficit.stone > 0 || deficit.bricks > 0) need += 0.55f;
+    else if (hasSite || needsHuts) need += 0.45f;
     if (stock.stone < 6) need += 0.35f;
+    // Wenn Steinklingen ("flint") noch erforscht wird oder eigenes Werkzeug fehlt -> Feuersteine suchen!
+    if (!ctx.tribe.Skills().IsUnlocked("flint") || agent.GetToolTier() == ToolTier::BareHands) {
+        need += 0.28f;
+    }
 
     float dist = DistanceFactor(agent.Position(), node->position);
-    float roleAffinity = (agent.GetRole() == Role::Gatherer) ? 1.1f : 0.9f;
+    float roleAffinity = (agent.GetRole() == Role::Gatherer) ? 1.15f : 0.95f;
 
-    float score = std::clamp(need * roleAffinity * dist, 0.0f, 0.86f);
-    outReason = TextFormat("Steine sammeln (Score: %.2f - Stein: %d)", score, stock.stone);
+    float score = std::clamp(need * roleAffinity * dist, 0.0f, 0.88f);
+    outReason = (deficit.stone > 0)
+        ? TextFormat("Steinbruch für %s (Score: %.2f)", ctx.tribe.CurrentPlan().description.c_str(), score)
+        : TextFormat("Steine & Flint sammeln (Score: %.2f - Stein: %d)", score, stock.stone);
     return score;
 }
 
@@ -350,37 +475,66 @@ float UtilityAI::ScoreBuild(const Caveman& agent, const WorldContext& ctx, int& 
     const Building* b = ctx.tribe.Buildings().Get(outBuildingId);
     if (!b) return 0.0f;
 
-    float basePriority = 0.65f;
-    if (b->type == BuildingType::TownCenter) basePriority = 0.82f;
-    if (ctx.tribe.NeedsMoreHuts(ctx.population) && b->type == BuildingType::Hut) basePriority = 0.78f;
+    bool isRepair = (b->finished && !b->underUpgrade && b->hp < b->maxHp);
+    float basePriority = isRepair ? 0.90f : 0.76f;
+    if (b->type == BuildingType::TownCenter) basePriority = 0.88f;
+    if (ctx.tribe.NeedsMoreHuts(ctx.population) && b->type == BuildingType::Hut) basePriority = std::max(basePriority, 0.85f);
 
     float dist = DistanceFactor(agent.Position(), b->position);
-    float score = std::clamp(basePriority * traits.buildEfficiency * dist, 0.0f, 0.94f);
+    float score = std::clamp(basePriority * traits.buildEfficiency * dist, 0.0f, 0.95f);
 
-    outReason = TextFormat("Bauen (Score: %.2f - %s)", score, b->DisplayName().c_str());
+    outReason = isRepair
+        ? TextFormat("Reparieren (Score: %.2f - %s)", score, b->DisplayName().c_str())
+        : TextFormat("Bauen (Score: %.2f - %s)", score, b->DisplayName().c_str());
     return score;
 }
 
 float UtilityAI::ScoreCraft(const Caveman& agent, const WorldContext& ctx, int& outBenchId, std::string& outReason) {
-    if (!ctx.tribe.Age().CanCraftRefined()) return 0.0f;
+    if (agent.GetRole() == Role::Child) return 0.0f;
 
     outBenchId = ctx.tribe.Buildings().FindCraftBench(agent.Position());
     if (outBenchId < 0) return 0.0f;
 
     const Stockpile& stock = ctx.tribe.Stock();
-    bool canPlanks = stock.wood >= 2 && stock.planks < 15;
-    bool canBricks = stock.stone >= 2 && stock.bricks < 10;
-    if (!canPlanks && !canBricks) return 0.0f;
+    const SkillTree& skills = ctx.tribe.Skills();
+    ResourceCost deficit = ctx.tribe.GetPlannedResourceDeficit();
+
+    bool canPlanks = (skills.IsUnlocked("carpentry") || ctx.tribe.Age().CanCraftRefined()) &&
+                     stock.wood >= 2 && (stock.planks < 15 || deficit.planks > 0);
+    bool canBricks = (skills.IsUnlocked("masonry") || ctx.tribe.Age().CurrentEra() >= Era::IronAge) &&
+                     stock.stone >= 2 && (stock.bricks < 10 || deficit.bricks > 0);
+    bool needsGear = agent.NeedsGearUpgrade(ctx.tribe);
+    bool needsExpGear = (skills.IsUnlocked("torches") && stock.torches < 3 && stock.wood >= 1) ||
+                        (skills.IsUnlocked("flint") && stock.pickaxes < 2 && stock.wood >= 1 && stock.stone >= 1);
+
+    // Prüfen, ob eine Nicht-POI-Technologie an der Werkbank durch Tüfteln erforscht werden kann
+    bool canPracticeTech = false;
+    for (const auto& n : skills.AllNodes()) {
+        if (!n.requiresPOI && n.state == TechState::Ready) {
+            canPracticeTech = true;
+            break;
+        }
+    }
+
+    if (!canPlanks && !canBricks && !needsGear && !needsExpGear && !canPracticeTech) return 0.0f;
 
     const Building* b = ctx.tribe.Buildings().Get(outBenchId);
     if (!b) return 0.0f;
 
-    float dist = DistanceFactor(agent.Position(), b->position);
-    float score = std::clamp(0.68f * dist, 0.0f, 0.85f);
+    float priority = 0.62f;
+    if (deficit.planks > 0 || deficit.bricks > 0) priority = 0.84f;
+    else if (needsGear || needsExpGear) priority = 0.78f;
+    else if (agent.GetRole() == Role::Elder && canPracticeTech) priority = 0.76f;
 
-    outReason = TextFormat("Veredeln (Score: %.2f - Werkbank)", score);
+    float dist = DistanceFactor(agent.Position(), b->position);
+    float score = std::clamp(priority * dist, 0.0f, 0.89f);
+
+    outReason = needsGear
+        ? TextFormat("Werkzeug/Kleidung fertigen (Score: %.2f)", score)
+        : TextFormat("Werkbank & Forschung (Score: %.2f)", score);
     return score;
 }
+
 
 float UtilityAI::ScoreWander(const Caveman& agent, const WorldContext& ctx, std::string& outReason) {
     (void)ctx;

@@ -37,6 +37,23 @@ Personality Personality::GenerateRandom(int roleIndex) {
     return p;
 }
 
+Personality Personality::Inherit(const Personality& parentA, const Personality& parentB) {
+    auto mixGene = [](float a, float b) {
+        // Zufällige Gewichtung der Eltern-Gene (30%..70%) + Mutation (-0.18 .. +0.18)
+        float weightA = (float)GetRandomValue(30, 70) / 100.0f;
+        float mutation = (float)GetRandomValue(-18, 18) / 100.0f;
+        return std::clamp(a * weightA + b * (1.0f - weightA) + mutation, -1.0f, 1.0f);
+    };
+
+    Personality child;
+    child.dominance   = mixGene(parentA.dominance,   parentB.dominance);
+    child.altruism    = mixGene(parentA.altruism,    parentB.altruism);
+    child.sociability = mixGene(parentA.sociability, parentB.sociability);
+    child.aggression  = mixGene(parentA.aggression,  parentB.aggression);
+    child.loyalty     = mixGene(parentA.loyalty,     parentB.loyalty);
+    return child;
+}
+
 std::string Personality::GetPrimaryTraitDescription() const {
     // Finde die stärkste Ausprägung
     float maxVal = 0.0f;

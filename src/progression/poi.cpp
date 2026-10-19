@@ -47,7 +47,8 @@ void POIManager::InitWorldPOIs(const World& world, Vector2 campPos) {
         poi.requiredEra = era;
         poi.spawnDelay = delay;
         poi.state = POIState::Hidden;
-        poi.spawned = false;
+        poi.spawned = true;
+        poi.state = POIState::Hidden;
 
         Vector2 spot;
         if (PlacePOISpot(world, campPos, type, spot)) {
@@ -62,27 +63,27 @@ void POIManager::InitWorldPOIs(const World& world, Vector2 campPos) {
     // 1. Steinzeit: Kalksteinhöhle (benötigt Fackel + Spitzhacke + Proviant)
     addPOI(POIType::LimestoneCave, "Verborgene Kalksteinhöhle",
            "Eine dunkle Höhle mit Höhlenmalereien und tiefen Gängen. Erfordert Fackel und Hacke.",
-           { true, true, true }, Era::StoneAge, 10.0f);
+           { true, true, true }, Era::StoneAge, 0.0f);
 
     // 2. Steinzeit: Megalith (benötigt Proviant)
     addPOI(POIType::AncientMegalith, "Uralter Megalith",
            "Kolossale, aufgerichtete Steinblöcke unserer Ahnen. Zentrum für Glauben und Weisheit.",
-           { false, false, true }, Era::StoneAge, 35.0f);
+           { false, false, true }, Era::StoneAge, 0.0f);
 
-    // 3. Bronzezeit (oder späte Steinzeit): Kupfer-Aufschluss (benötigt Spitzhacke + Proviant)
+    // 3. Späte Steinzeit / Kupferzeit: Kupfer-Aufschluss (benötigt Spitzhacke + Proviant)
     addPOI(POIType::CopperOutcrop, "Kupfer-Aufschluss",
            "Gesteinsadern mit leuchtend grünem Malachit und rötlichem Rohkupfer.",
-           { false, true, true }, Era::StoneAge, 85.0f);
+           { false, true, true }, Era::StoneAge, 0.0f);
 
     // 4. Bronzezeit: Zinn-Flussbett (benötigt Spitzhacke/Grabwerkzeug + Proviant)
     addPOI(POIType::TinRiverbed, "Zinn-Flussbett",
            "Schwemmsand mit schwerem Kassiterit-Zinnkies. Unverzichtbar für Bronzelegierungen.",
-           { false, true, true }, Era::BronzeAge, 15.0f);
+           { false, true, true }, Era::BronzeAge, 0.0f);
 
     // 5. Eisenzeit: Eisenerz-Spalte (benötigt Fackel + Spitzhacke + Proviant)
     addPOI(POIType::IronRift, "Eisenerz-Spalte",
            "Eine tiefe Felsspalte mit rötlich-schwarzen Hämatit-Adern für Eisenverhüttung.",
-           { true, true, true }, Era::BronzeAge, 80.0f);
+           { true, true, true }, Era::BronzeAge, 0.0f);
 }
 
 bool POIManager::PlacePOISpot(const World& world, Vector2 campPos, POIType type, Vector2& outPos) const {
@@ -101,8 +102,8 @@ bool POIManager::PlacePOISpot(const World& world, Vector2 campPos, POIType type,
         if (type == POIType::LimestoneCave || type == POIType::CopperOutcrop || type == POIType::IronRift) {
             // Nahe Fels/Berg oder Wald
             bool nearMountainOrForest = world.HasNeighbor(tx, ty, TILE_MOUNTAIN) ||
-                                        world.HasNeighbor(tx, ty, TILE_FOREST) ||
-                                        world.GetTile(tx, ty) == TILE_FOREST;
+                                         world.HasNeighbor(tx, ty, TILE_FOREST) ||
+                                         world.GetTile(tx, ty) == TILE_FOREST;
             if (!nearMountainOrForest && attempt < 250) continue;
         } else if (type == POIType::TinRiverbed) {
             // Nahe Wasser oder Sand
@@ -135,29 +136,32 @@ void POIManager::Update(const World& world, Vector2 campPos, Era era, float eraT
                         const std::vector<Caveman>& cavemen, EventLog& log) {
     (void)world;
     (void)campPos;
+    (void)eraTime;
 
     for (auto& poi : pois_) {
-        // 1. Spawnen bei Erreichen des Zeitfensters
-        if (!poi.spawned) {
-            bool eraMatch = (era > poi.requiredEra) ||
-                            (era == poi.requiredEra && eraTime >= poi.spawnDelay);
-            if (eraMatch) {
-                poi.spawned = true;
-                poi.state = POIState::Discovered; // Entdeckt und bereit
-                log.Add(TextFormat("ENTDECKUNG: Ein neuer Ort wurde entdeckt: %s!", poi.name.c_str()),
-                        POIColor(poi.type));
-            }
-        }
-
-        // 2. Aufdecken durch wandernde Figuren
-        if (poi.spawned && poi.state == POIState::Hidden) {
+        // Kausales Aufdecken:
+        // 1. Organisch durch wandernde Stammesmitglieder in der Wildnis
+        if (poi.state == POIState::Hidden) {
             for (const auto& c : cavemen) {
-                if (!c.IsDead() && Vector2Distance(c.Position(), poi.position) < 80.0f) {
+                if (!c.IsDead() && Vector2Distance(c.Position(), poi.position) < 95.0f) {
                     poi.state = POIState::Discovered;
-                    log.Add(TextFormat("%s hat %s in der Wildnis gesichtet!", c.Name().c_str(), poi.name.c_str()),
+                    log.Add(TextFormat("%s hat %s in der Wildnis entdeckt!", c.Name().c_str(), poi.name.c_str()),
                             POIColor(poi.type));
                     break;
                 }
+            }
+        }
+
+        // 2. Kausal durch Erreichen der entsprechenden Epoche oder durch Stammeskunde
+        if (poi.state == POIState::Hidden && era >= poi.requiredEra) {
+            // Höhle & Megalith in der Steinzeit immer als Gerücht bekannt
+            if (poi.type == POIType::LimestoneCave || poi.type == POIType::AncientMegalith ||
+                poi.type == POIType::CopperOutcrop) {
+                poi.state = POIState::Discovered;
+                log.Add(TextFormat("KUNDE: Der Stamm erfährt von einem geheimnisvollen Ort: %s!", poi.name.c_str()),
+                        POIColor(poi.type));
+            } else if (era > poi.requiredEra) {
+                poi.state = POIState::Discovered;
             }
         }
     }
@@ -192,10 +196,10 @@ const PointOfInterest* POIManager::GetByType(POIType type) const {
 }
 
 bool POIManager::HasRequiredGear(const PointOfInterest& poi, const Stockpile& stock) const {
-    // Prüft, ob Stamm genug Ressourcen für Ausrüstung hat
-    if (poi.gear.torch && stock.wood < cfg::kTorchWoodCost) return false;
-    if (poi.gear.pickaxe && (stock.wood < cfg::kPickaxeWoodCost || stock.stone < cfg::kPickaxeStoneCost)) return false;
-    if (poi.gear.provisions && stock.food < 2) return false;
+    // Prüft, ob Stamm genug Ressourcen oder gefertigte Ausrüstung für die Expedition hat
+    if (poi.gear.torch && (stock.torches == 0 && stock.wood < cfg::kTorchWoodCost)) return false;
+    if (poi.gear.pickaxe && (stock.pickaxes == 0 && (stock.wood < cfg::kPickaxeWoodCost || stock.stone < cfg::kPickaxeStoneCost))) return false;
+    if (poi.gear.provisions && (stock.food + stock.cookedFood < 2)) return false;
     return true;
 }
 

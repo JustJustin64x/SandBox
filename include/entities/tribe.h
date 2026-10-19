@@ -17,13 +17,16 @@ class EventLog;
 
 // Globales Stammes-Lager (Inventar für Rohstoffe, veredelte Güter & Expeditions-Ausrüstung).
 struct Stockpile {
-    int food   = 0;
-    int wood   = 0;
-    int stone  = 0;
-    int planks = 0;   // Veredelt aus Holz an der Werkbank
-    int bricks = 0;   // Veredelt aus Stein an der Werkbank
-    int tools  = 0;   // Werkzeuge für erhöhte Effizienz
-    int huts   = 0;   // Anzahl fertiger Hütten
+    int food       = 0;
+    int cookedFood = 2; // Am Feuer gebratene / gekochte Mahlzeiten (nahrhafter & länger haltbar)
+    int wood       = 0;
+    int stone      = 0;
+    int planks     = 0; // Veredelt aus Holz an der Werkbank
+    int bricks     = 0; // Veredelt aus Stein an der Werkbank / im Lehmofen
+    int tools      = 0; // Werkzeuge für erhöhte Effizienz
+    int huts       = 0; // Anzahl fertiger Hütten
+    int hides      = 2; // Tierfelle / Rohleder aus der Jagd (für Kleidung)
+    int bones      = 2; // Tierknochen aus der Jagd (für Nadeln, Speere & Bögen)
 
     // Expeditions-Ausrüstung
     int torches    = 2; // Startausrüstung
@@ -65,10 +68,26 @@ public:
     void Update(const World& world, const std::vector<Caveman>& cavemen, int population, float dt, EventLog& log);
     void Draw(float time) const;
 
-    // --- Bau- & Infrastruktur-Hilfen -----------------------------------------
+    // --- Autonomer Siedlungsplaner (Stufe 1: Zero-Player-Bauentwicklung) -----
+    struct SettlementPlan {
+        bool active = false;
+        bool isUpgrade = false;
+        BuildingType type = BuildingType::Hut;
+        int upgradeBuildingId = -1;
+        Vector2 buildCenter = { 0.0f, 0.0f };
+        ResourceCost requiredCost = { 0, 0, 0, 0 };
+        std::string description;
+    };
+
     bool NeedsMoreHuts(int population) const;
     int SleepingCapacity() const { return buildings_.TotalSleepingCapacity(); }
     int EnsureConstructionSite(const World& world, EventLog& log);
+    const SettlementPlan& CurrentPlan() const { return planner_; }
+    ResourceCost GetPlannedResourceDeficit() const;
+    bool FindBuildingSpotAround(const World& world, Vector2 center, Vector2& out) const;
+
+    // --- Territorien-Visualisierung (Stufe 4: Fraktions-Overlay) -------------
+    void DrawTerritoryOverlay(const World& world, float simTime) const;
 
     // --- Veredelung an der Werkbank ------------------------------------------
     bool CanCraftPlanks() const { return stock_.wood >= 2; }
@@ -83,6 +102,7 @@ public:
     void CraftPickaxe() { if (stock_.wood >= 1 && stock_.stone >= 1) { stock_.wood--; stock_.stone--; stock_.pickaxes++; } }
 
 private:
+    void UpdateSettlementPlanner(const World& world, const std::vector<Caveman>& cavemen, int population, float dt, EventLog& log);
     bool FindBuildingSpot(const World& world, Vector2& out) const;
     void DrawStockpile() const;
 
@@ -94,7 +114,10 @@ private:
     SocialHierarchy hierarchy_;
     POIManager pois_;
     SkillTree skillTree_;
+    SettlementPlan planner_;
+    float plannerTimer_ = 0.0f;
     float spoilageTimer_ = 0.0f;
 };
 
 #endif // TRIBE_H
+

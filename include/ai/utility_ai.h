@@ -29,6 +29,7 @@ public:
     static UtilityDecision Evaluate(const Caveman& agent, const WorldContext& ctx);
 
 private:
+    static float ScoreFlee(const Caveman& agent, const WorldContext& ctx, std::string& outReason);
     static float ScoreEat(const Caveman& agent, const WorldContext& ctx, std::string& outReason);
     static float ScoreSleep(const Caveman& agent, const WorldContext& ctx, int& outHutId, std::string& outReason);
     static float ScoreWarmUp(const Caveman& agent, const WorldContext& ctx, int& outShelterId, std::string& outReason);

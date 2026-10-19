@@ -1,6 +1,7 @@
 #include "world/resource_node.h"
 #include "core/config.h"
 #include "world/world.h"
+#include "world/environmental_system.h"
 
 #include <algorithm>
 
@@ -174,6 +175,23 @@ void ResourceManager::Update(const World& world, Vector2 campPos, float dt) {
             UpdateAnimal(n, world, campPos, dt);
             continue;
         }
+        // Verkohlte Bäume/Büsche brauchen länger, um sich aus der Asche zu erholen
+        if (n.charred) {
+            const int tx = World::ToTile(n.position.x);
+            const int ty = World::ToTile(n.position.y);
+            if (world.Env() && world.Env()->GetState(tx, ty).isBurning) {
+                n.regrowTimer = 0.0f;
+                continue;
+            }
+            n.regrowTimer += dt;
+            if (n.regrowTimer >= cfg::kTreeRegrowTime * 2.2f) {
+                n.charred = false;
+                n.regrowTimer = 0.0f;
+                n.amount = 1;
+                n.generation++;
+            }
+            continue;
+        }
         if (n.amount >= n.maxAmount) {
             n.regrowTimer = 0.0f;
             continue;
@@ -195,7 +213,29 @@ void ResourceManager::UpdateAnimal(ResourceNode& n, const World& world, Vector2 
         if (n.respawnTimer <= 0.0f) RespawnAnimal(n, world, campPos);
         return;
     }
-    if (n.engaged) return;   // wird gerade bekämpft -> steht still
+
+    n.panicTimer = std::max(0.0f, n.panicTimer - dt);
+
+    // Prüfen, ob Feuer oder Strom in der Nähe ist -> Panische Flucht!
+    if (world.Env()) {
+        Vector2 hazardCenter = { 0.0f, 0.0f };
+        if (world.Env()->IsHazardNear(n.position, 44.0f, hazardCenter)) {
+            n.engaged = false;
+            n.panicTimer = 2.4f;
+            Vector2 away = Vector2Subtract(n.position, hazardCenter);
+            if (Vector2Length(away) < 0.5f) away = { 1.0f, 0.0f };
+            away = Vector2Normalize(away);
+            Vector2 escapeTarget = Vector2Add(n.position, Vector2Scale(away, 55.0f));
+            if (world.IsWalkable(escapeTarget)) {
+                n.wanderTarget = escapeTarget;
+            } else {
+                world.FindRandomWalkablePosition(n.position, 55.0f, n.wanderTarget, 12);
+            }
+            n.wanderTimer = 1.2f;
+        }
+    }
+
+    if (n.engaged && n.panicTimer <= 0.0f) return;   // wird gerade bekämpft -> steht still
 
     n.wanderTimer -= dt;
     if (n.wanderTimer <= 0.0f || Vector2Distance(n.position, n.wanderTarget) < 2.0f) {
@@ -208,11 +248,12 @@ void ResourceManager::UpdateAnimal(ResourceNode& n, const World& world, Vector2 
     const float dist = Vector2Length(delta);
     if (dist < 1.0f) return;
 
+    const float speedMult = (n.panicTimer > 0.0f) ? 1.75f : 1.0f;
     const Vector2 dir = Vector2Scale(delta, 1.0f / dist);
-    const Vector2 next = Vector2Add(n.position, Vector2Scale(dir, std::min(dist, cfg::kAnimalSpeed * dt)));
+    const Vector2 next = Vector2Add(n.position, Vector2Scale(dir, std::min(dist, cfg::kAnimalSpeed * speedMult * dt)));
     if (world.IsWalkable(next)) {
         n.position = next;
-        n.animTime += dt;
+        n.animTime += dt * speedMult;
         if (std::fabs(dir.x) > 0.1f) n.facingLeft = dir.x < 0.0f;
     } else {
         n.wanderTimer = 0.0f;   // Hindernis -> neues Ziel
@@ -234,6 +275,8 @@ void ResourceManager::RespawnAnimal(ResourceNode& n, const World& world, Vector2
     n.hp = cfg::kAnimalHp;
     n.amount = n.maxAmount;
     n.engaged = false;
+    n.charred = false;
+    n.panicTimer = 0.0f;
     n.generation++;
 }
 
@@ -252,7 +295,13 @@ void ResourceManager::Draw(const Camera2D& camera) const {
         switch (n.type) {
             case ResourceType::Tree:
                 DrawEllipse((int)x, (int)y, 6, 2, Fade(BLACK, 0.25f));
-                if (n.amount > 0) {
+                if (n.charred) {
+                    // Verkohlter Baumstumpf mit Glutresten
+                    DrawRectangleRec({ x - 2.5f, y - 5.0f, 5.0f, 5.0f }, { 38, 32, 30, 255 });
+                    DrawLineEx({ x - 2.0f, y - 5.0f }, { x - 3.5f, y - 8.5f }, 1.5f, { 30, 25, 22, 255 });
+                    DrawLineEx({ x + 1.5f, y - 5.0f }, { x + 3.0f, y - 7.5f }, 1.3f, { 30, 25, 22, 255 });
+                    DrawCircleV({ x, y - 2.5f }, 1.2f, { 235, 95, 30, 200 }); // Glutpunkt
+                } else if (n.amount > 0) {
                     DrawRectangleRec({ x - 1.5f, y - 7.0f, 3.0f, 7.0f }, { 110, 70, 35, 255 });
                     DrawCircleV({ x, y - 12.0f }, 6.5f, { 30, 90, 30, 255 });
                     DrawCircleV({ x - 3.5f, y - 9.0f }, 4.5f, { 40, 115, 40, 255 });
@@ -263,6 +312,10 @@ void ResourceManager::Draw(const Camera2D& camera) const {
                 break;
 
             case ResourceType::Bush: {
+                if (n.charred) {
+                    DrawCircleV({ x, y - 2.0f }, 3.5f, { 45, 40, 38, 255 });
+                    break;
+                }
                 DrawCircleV({ x, y - 3.0f }, 5.0f, { 35, 105, 35, 255 });
                 DrawCircleV({ x - 3.0f, y - 2.0f }, 3.5f, { 45, 125, 45, 255 });
                 static const Vector2 kBerryOffsets[5] = { { -2, -5 }, { 2, -4 }, { 0, -1 }, { -4, -2 }, { 3, -1 } };
@@ -292,6 +345,9 @@ void ResourceManager::Draw(const Camera2D& camera) const {
                 DrawEllipse((int)x, (int)(y - 4.0f), 6, 3, fur);
                 DrawCircleV({ x + 6.0f * dir, y - 6.0f }, 2.5f, fur);
                 DrawLineEx({ x + 6.0f * dir, y - 8.0f }, { x + 8.0f * dir, y - 10.5f }, 0.8f, { 230, 220, 200, 255 });
+                if (n.panicTimer > 0.0f) {
+                    DrawText("!", (int)x - 1, (int)(y - 16.0f), 10, ORANGE);
+                }
                 if (n.hp < cfg::kAnimalHp) {   // Lebensbalken während der Jagd
                     DrawRectangleRec({ x - 6.0f, y - 13.0f, 12.0f, 1.5f }, Fade(BLACK, 0.6f));
                     DrawRectangleRec({ x - 6.0f, y - 13.0f, 12.0f * std::max(0.0f, n.hp) / cfg::kAnimalHp, 1.5f }, RED);

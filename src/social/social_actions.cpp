@@ -111,6 +111,8 @@ void SocialActionEvaluator::ExecuteSocialize(Caveman& agent, Caveman& target, Wo
 
     agent.ResetSocialNeed();
     target.ResetSocialNeed();
+    agent.TriggerEmote(SocialEmote::Chat, 3.2f);
+    target.TriggerEmote(SocialEmote::Chat, 3.2f);
 
     // Klatsch & Tratsch: Agent teilt Meinung über eine zufällige dritte Person
     int sampleThirdId = (agent.Id() % 3 == 0) ? 1 : 2;
@@ -133,12 +135,14 @@ void SocialActionEvaluator::ExecuteFlirt(Caveman& agent, Caveman& target, WorldC
 
     agent.ResetSocialNeed();
     target.ResetSocialNeed();
+    agent.TriggerEmote(SocialEmote::Heart, 3.8f);
+    target.TriggerEmote(SocialEmote::Heart, 3.8f);
 
     float affA = rels.GetAffinity(agent.Id(), target.Id());
     float affB = rels.GetAffinity(target.Id(), agent.Id());
 
-    // Ab 70 gegenseitiger Zuneigung wird ein Paar daraus!
-    if (affA >= 70.0f && affB >= 70.0f) {
+    // Ab 55 gegenseitiger Zuneigung wird ein Paar daraus!
+    if (affA >= 55.0f && affB >= 55.0f) {
         rels.FormPartnership(agent.Id(), target.Id(), ctx.log, agent.Name(), target.Name());
         ctx.tribe.Hierarchy().GetOrCreateFamily(agent.Id(), target.Id());
     }
@@ -148,6 +152,9 @@ void SocialActionEvaluator::ExecuteShareFood(Caveman& agent, Caveman& target, Wo
     if (ctx.tribe.Stock().food > 0) {
         ctx.tribe.Stock().food--;
         target.Feed(30.0f);
+
+        agent.TriggerEmote(SocialEmote::ShareFood, 3.4f);
+        target.TriggerEmote(SocialEmote::ShareFood, 3.4f);
 
         RelationshipManager& rels = ctx.tribe.Relationships();
         rels.ApplyInteraction(target.Id(), agent.Id(), MemoryType::SharedFood, 0.0f);
@@ -161,6 +168,9 @@ void SocialActionEvaluator::ExecuteDispute(Caveman& agent, Caveman& target, Worl
     RelationshipManager& rels = ctx.tribe.Relationships();
     rels.ApplyInteraction(agent.Id(), target.Id(), MemoryType::Insulted, 0.0f);
     rels.ApplyInteraction(target.Id(), agent.Id(), MemoryType::Insulted, 0.0f);
+
+    agent.TriggerEmote(SocialEmote::Dispute, 3.5f);
+    target.TriggerEmote(SocialEmote::Dispute, 3.5f);
 
     ctx.log.Add(TextFormat("Streit & Sticheleien zwischen %s und %s!", agent.Name().c_str(), target.Name().c_str()),
                 { 240, 120, 100, 255 });

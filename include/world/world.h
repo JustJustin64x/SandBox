@@ -22,6 +22,8 @@ struct TileProperty {
     bool isLiquid;
 };
 
+class EnvironmentalSystem;
+
 // Kachelbasierte Spielwelt inkl. Generierung, Begehbarkeit und A*-Pfadsuche.
 class World {
 public:
@@ -32,6 +34,9 @@ public:
     float PixelWidth() const  { return (float)(width_ * TILE_SIZE); }
     float PixelHeight() const { return (float)(height_ * TILE_SIZE); }
     Vector2 CenterPosition() const;
+
+    void SetEnvironmentalSystem(const EnvironmentalSystem* env) { env_ = env; }
+    const EnvironmentalSystem* Env() const { return env_; }
 
     // --- Kachelzugriff --------------------------------------------------------
     bool IsInBounds(int x, int y) const;
@@ -56,6 +61,13 @@ public:
                         int attempts = 400) const;
     bool FindNearestWalkableTile(int tx, int ty, int maxRadius, int& outX, int& outY) const;
 
+    // --- Dynamische Wege (Trampelpfade & Gepflasterte Straßen) ----------------
+    void AddFootTraffic(int tx, int ty, float amount, bool canPave = false);
+    float GetFootTraffic(int tx, int ty) const;
+    bool IsPavedRoad(int tx, int ty) const;
+    float GetRoadSpeedMultiplier(Vector2 worldPos) const;
+    void UpdateRoads(float dt);
+
     // --- Pfadsuche ---------------------------------------------------------------
     // A* auf dem Kachelraster (8 Richtungen, keine Eckabkürzungen) mit
     // anschließender Glättung. outPath enthält Wegpunkte ohne Startposition.
@@ -71,6 +83,9 @@ private:
     int width_;
     int height_;
     std::vector<TileType> tiles_;
+    std::vector<float> footTraffic_;
+    std::vector<unsigned char> pavedRoad_;
+    const EnvironmentalSystem* env_ = nullptr;
 
     // Wiederverwendete A*-Puffer (Stempel-Technik vermeidet Neuinitialisierung).
     mutable std::vector<float> gScore_;
@@ -79,4 +94,5 @@ private:
     mutable std::vector<unsigned int> closedStamp_;
     mutable unsigned int stamp_ = 0;
 };
+
 

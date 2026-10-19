@@ -16,6 +16,7 @@ struct Personality {
     float loyalty     = 0.0f; // -1.0 (opportunistisch) .. +1.0 (treu zu Clan/Reich)
 
     static Personality GenerateRandom(int roleIndex);
+    static Personality Inherit(const Personality& parentA, const Personality& parentB);
     std::string GetPrimaryTraitDescription() const;
 };
 
