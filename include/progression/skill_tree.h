@@ -1,0 +1,80 @@
+#ifndef SKILL_TREE_H
+#define SKILL_TREE_H
+
+#include "common.h"
+#include "age_manager.h"
+#include "poi.h"
+
+#include <string>
+#include <vector>
+
+enum class TechState {
+    Locked,        // Voraussetzungen noch nicht erfüllt
+    Ready,         // Voraussetzungen erfüllt, wartet auf Expedition / Erforschung
+    InExpedition,  // Eine Expedition ist unterwegs oder erforscht vor Ort
+    Mastered       // Vollständig gemeistert & freigeschaltet
+};
+
+struct TechNode {
+    int id = 0;
+    std::string key;
+    std::string name;
+    std::string description;
+    std::string benefit;
+    Era era = Era::StoneAge;
+    bool isMilestone = false;  // Zwingend für Zeitalter-Aufstieg!
+
+    TechState state = TechState::Locked;
+    std::vector<int> prereqIds;
+
+    // Koppelung an POI
+    bool requiresPOI = false;
+    POIType targetPOIType = POIType::LimestoneCave;
+    RequiredGear gear;
+
+    // UI-Layout (Spalte, Zeile auf dem Skilltree)
+    int uiCol = 0;
+    int uiRow = 0;
+};
+
+class SkillTree {
+public:
+    SkillTree();
+
+    void Init();
+    void Update(POIManager& pois, EventLog& log);
+
+    bool IsUnlocked(const std::string& key) const;
+    bool IsUnlocked(int id) const;
+
+    // Meilenstein-Prüfung für Epochenwechsel
+    bool AreEraMilestonesCompleted(Era era) const;
+    int GetMilestonesTotal(Era era) const;
+    int GetMilestonesCompleted(Era era) const;
+
+    TechNode* GetNode(int id);
+    const TechNode* GetNode(int id) const;
+    TechNode* GetNodeByKey(const std::string& key);
+    const TechNode* GetNodeByKey(const std::string& key) const;
+
+    const std::vector<TechNode>& AllNodes() const { return nodes_; }
+
+    // Spieler-Fokus / Priorisierung
+    void SetFocusNode(int id) { focusNodeId_ = id; }
+    int GetFocusNode() const { return focusNodeId_; }
+
+    // Abschluss einer Technologie
+    bool CompleteNode(int id, EventLog& log);
+
+    // Findet die fokussierte oder nächste erforschbare Technologie
+    const TechNode* GetActiveOrNextDiscoverable(Era currentEra) const;
+
+private:
+    void RefreshNodeStates(const POIManager& pois);
+
+    std::vector<TechNode> nodes_;
+    int focusNodeId_ = -1;
+};
+
+#endif // SKILL_TREE_H
+

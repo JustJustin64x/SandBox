@@ -1,4 +1,5 @@
-#pragma once
+#ifndef SIMULATION_H
+#define SIMULATION_H
 
 // --- Core ---
 #include "core/common.h"
@@ -13,11 +14,9 @@
 #include "entities/caveman.h"
 #include "entities/tribe.h"
 
-// --- Graphics ---
+// --- Graphics & UI ---
 #include "gfx/sprite_sheet.h"
-
-// --- Civilization Simulation ---
-#include "civ/WorldSimulation.h"
+#include "skill_tree_ui.h"
 
 #include <vector>
 #include <memory>
@@ -43,6 +42,10 @@ public:
     bool IsPaused() const { return isPaused_; }
     void SetPaused(bool paused) { isPaused_ = paused; }
 
+    bool IsSkillTreeOpen() const { return skillTreeUI_.IsOpen(); }
+    void SetSkillTreeOpen(bool open) { skillTreeUI_.SetOpen(open); }
+    void ToggleSkillTree() { skillTreeUI_.Toggle(); }
+
     SelectedAction GetCurrentAction() const { return currentAction_; }
     void SetCurrentAction(SelectedAction action);
 
@@ -62,6 +65,7 @@ private:
     std::vector<Caveman> cavemen_;
     SpriteSheet spriteSheet_;
     EventLog eventLog_;
+    SkillTreeUI skillTreeUI_;
 
     bool isPaused_ = false;
     float timeSpeed_ = 1.0f;
@@ -75,9 +79,6 @@ private:
 
     // Selektion / Inspektor
     int selectedCavemanId_ = -1;
-    int selectedCreatureId_ = -1;
-
-    // Modulare Zivilisations-Simulation
-    WorldSimulation civSim_;
 };
 
+#endif // SIMULATION_H

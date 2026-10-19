@@ -40,9 +40,9 @@ try {
         return
     }
 
-    $includes = @('include', 'include/core', 'include/gfx', 'include/world', 'include/entities', 'include/civ') | ForEach-Object { "-I$_" }
+    $includes = @('include', 'include/core', 'include/gfx', 'include/world', 'include/entities', 'include/buildings', 'include/ai', 'include/social', 'include/progression', 'include/ui', 'include/civ') | ForEach-Object { "-I$_" }
     $sources = @(Get-ChildItem -Path src -Filter '*.cpp' -Recurse | ForEach-Object { $_.FullName })
-    & $compiler -Wall -Wextra -std=c++17 -O2 @includes -isystem "$raylib/src" @sources -o worldbox.exe $library -lopengl32 -lgdi32 -lwinmm -static-libgcc -static-libstdc++
+    & $compiler -Wall -Wextra -Wno-missing-field-initializers -std=c++17 -O2 @includes -isystem "$raylib/src" @sources -o worldbox.exe $library -lopengl32 -lgdi32 -lwinmm -static-libgcc -static-libstdc++
     if ($LASTEXITCODE -ne 0) { throw 'WorldBox compilation failed.' }
     Write-Host 'Build successful: worldbox.exe'
 

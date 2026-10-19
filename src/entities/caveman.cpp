@@ -1,32 +1,28 @@
-#include "entities/caveman.h"
-#include "core/config.h"
-#include "core/event_log.h"
-#include "gfx/sprite_sheet.h"
-#include "entities/tribe.h"
-#include "world/world.h"
+#include "caveman.h"
+#include "config.h"
+#include "event_log.h"
+#include "sprite_sheet.h"
+#include "tribe.h"
+#include "building.h"
+#include "world.h"
+#include "utility_ai.h"
+#include "relationship.h"
+#include "social_structure.h"
+#include "social_actions.h"
 
 #include <algorithm>
 #include <utility>
 
 namespace {
 
-// Prioritäten der Absichten: Eine laufende Tätigkeit wird nur von einer
-// Absicht mit HÖHERER Priorität unterbrochen.
-constexpr int kPrioIdle      = 0;
-constexpr int kPrioMaterials = 10;
-constexpr int kPrioBuild     = 15;
-constexpr int kPrioProvision = 20;
-constexpr int kPrioHunger    = 40;
-constexpr int kPrioSleep     = 50;
-
-constexpr float kBlockDuration = 3.0f;   // so lange wird ein gescheiterter Zustand gemieden
+constexpr float kBlockDuration = 3.0f;
 
 const RoleTraits kRoleTraits[4] = {
-    //  speed work  build yield hunger tired attack canHunt canBuild canMat row
-    {  44.0f, 1.0f, 1.0f, 1.0f, 1.1f,  1.0f, 10.0f, true,   true,    true,  0 },   // Jäger
-    {  40.0f, 1.0f, 1.0f, 1.3f, 1.0f,  1.0f,  3.0f, false,  true,    true,  1 },   // Sammlerin
-    {  28.0f, 0.7f, 1.3f, 0.7f, 0.8f,  1.3f,  2.0f, false,  true,    true,  2 },   // Ältester
-    {  36.0f, 0.5f, 0.0f, 0.4f, 0.8f,  1.1f,  1.0f, false,  false,   false, 3 },   // Kind
+    //  speed work  build craft yield hunger tired attack canHunt canBuild canCraft canMat row
+    {  44.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.1f,  1.0f, 10.0f, true,   true,    true,    true,  0 },   // Jäger
+    {  40.0f, 1.0f, 1.0f, 1.0f, 1.3f, 1.0f,  1.0f,  3.0f, false,  true,    true,    true,  1 },   // Sammlerin
+    {  28.0f, 0.7f, 1.3f, 1.5f, 0.7f, 0.8f,  1.3f,  2.0f, false,  true,    true,    true,  2 },   // Ältester
+    {  36.0f, 0.5f, 0.0f, 0.0f, 0.4f, 0.8f,  1.1f,  1.0f, false,  false,   false,   false, 3 },   // Kind
 };
 
 } // namespace
@@ -52,6 +48,10 @@ const char* StateName(CavemanState state) {
         case CavemanState::GatheringFood:      return "GATHERING_FOOD";
         case CavemanState::GatheringMaterials: return "GATHERING_MATERIALS";
         case CavemanState::Building:           return "BUILDING";
+        case CavemanState::Crafting:           return "CRAFTING";
+        case CavemanState::WarmingUp:          return "WARMING_UP";
+        case CavemanState::Socializing:        return "SOCIALIZING";
+        case CavemanState::Expedition:         return "EXPEDITION";
         case CavemanState::Sleeping:           return "SLEEPING";
         case CavemanState::Eating:             return "EATING";
         case CavemanState::Dead:               return "DEAD";
@@ -78,12 +78,18 @@ const RoleTraits& GetRoleTraits(Role role) {
 // ============================================================================
 Caveman::Caveman(int id, std::string name, Role role, Vector2 position)
     : id_(id), name_(std::move(name)), role_(role), position_(position), targetPosition_(position) {
-    // Leicht unterschiedliche Startwerte, damit nicht alle gleichzeitig handeln
-    hunger_     = (float)GetRandomValue(5, 35);
-    tiredness_  = (float)GetRandomValue(0, 30);
-    ap_         = (float)GetRandomValue(80, 100);
+    hunger_     = (float)GetRandomValue(5, 30);
+    warmth_     = (float)GetRandomValue(85, 100);
+    tiredness_  = (float)GetRandomValue(0, 25);
+    ap_         = (float)GetRandomValue(85, 100);
+    morale_     = (float)GetRandomValue(70, 85);
+    socialNeed_ = (float)GetRandomValue(20, 50);
+
+    // Unveränderliches psychologisches Profil
+    personality_ = Personality::GenerateRandom((int)role_);
+
     facingLeft_ = GetRandomValue(0, 1) == 1;
-    thinkTimer_ = (float)GetRandomValue(0, 50) / 100.0f;
+    thinkTimer_ = (float)GetRandomValue(0, 40) / 100.0f;
     animTime_   = (float)GetRandomValue(0, 100) / 100.0f;
 }
 
@@ -91,22 +97,21 @@ Caveman::Caveman(int id, std::string name, Role role, Vector2 position)
 //  Haupt-Update
 // ============================================================================
 void Caveman::Update(WorldContext& ctx, float dt) {
-    if (state_ == CavemanState::Dead) return;   // Tote werden nicht mehr aktualisiert
+    if (state_ == CavemanState::Dead) return;
 
     animTime_ += dt;
     damageFlash_  = std::max(0.0f, damageFlash_ - dt);
     blockedTimer_ = std::max(0.0f, blockedTimer_ - dt);
 
-    // 1) Bedürfnisse verändern sich über die Zeit
+    // 1) Bedürfnisse & Gedächtnis aktualisieren
     UpdateNeeds(ctx, dt);
     if (hp_ <= 0.0f) { Die(ctx); return; }
 
-    // 2) "Denken": regelmäßig oder sobald die aktuelle Aufgabe erledigt ist
+    // 2) Situativ-logisches Denken (Utility AI)
     thinkTimer_ -= dt;
     if (taskDone_ || thinkTimer_ <= 0.0f) {
         thinkTimer_ = cfg::kThinkInterval;
-        const Intent intent = Think(ctx);
-        if (taskDone_ || (intent.priority > currentPriority_ && IsInterruptible())) ApplyIntent(intent, ctx);
+        Think(ctx);
     }
 
     // 3) Aktuellen Zustand ausführen
@@ -118,37 +123,71 @@ void Caveman::Update(WorldContext& ctx, float dt) {
         case CavemanState::GatheringFood:
         case CavemanState::GatheringMaterials: UpdateHarvesting(ctx, dt); break;
         case CavemanState::Building:           UpdateBuilding(ctx, dt); break;
+        case CavemanState::Crafting:           UpdateCrafting(ctx, dt); break;
+        case CavemanState::WarmingUp:          UpdateWarmingUp(ctx, dt); break;
+        case CavemanState::Socializing:        UpdateSocializing(ctx, dt); break;
+        case CavemanState::Expedition:         UpdateExpedition(ctx, dt); break;
         case CavemanState::Sleeping:           UpdateSleeping(ctx, dt); break;
         case CavemanState::Eating:             UpdateEating(ctx, dt); break;
         case CavemanState::Dead:               break;
     }
 
-    if (hp_ <= 0.0f) Die(ctx);   // z. B. durch Gegenangriff eines Wildtiers
+    if (hp_ <= 0.0f) Die(ctx);
 }
 
 void Caveman::UpdateNeeds(WorldContext& ctx, float dt) {
-    (void)ctx;
     const RoleTraits& t = GetRoleTraits(role_);
-    const bool asleep = state_ == CavemanState::Sleeping && phase_ == TaskPhase::Working;
-    const bool working = phase_ == TaskPhase::Working &&
-                         (state_ == CavemanState::Hunting || state_ == CavemanState::GatheringFood ||
-                          state_ == CavemanState::GatheringMaterials || state_ == CavemanState::Building);
+    const bool asleep = (state_ == CavemanState::Sleeping && phase_ == TaskPhase::Working);
+    const bool working = (phase_ == TaskPhase::Working &&
+                          (state_ == CavemanState::Hunting || state_ == CavemanState::GatheringFood ||
+                           state_ == CavemanState::GatheringMaterials || state_ == CavemanState::Building ||
+                           state_ == CavemanState::Crafting));
 
-    // Hunger steigt stetig (im Schlaf langsamer)
+    // 1. Hunger
     const float hungerRate = cfg::kHungerPerSecond * t.hungerRate * (asleep ? cfg::kSleepHungerFactor : 1.0f);
     hunger_ = std::min(cfg::kMaxStat, hunger_ + hungerRate * dt);
+    if (hunger_ >= cfg::kMaxStat) {
+        TakeDamage(cfg::kStarvationDamagePerSecond * dt, "Hunger", ctx);
+    }
 
-    // Müdigkeit steigt im Wachzustand (bei Arbeit schneller)
+    // 2. Müdigkeit
     if (!asleep) {
         const float tiredRate = cfg::kTirednessPerSecond + (working ? cfg::kWorkTirednessPerSecond : 0.0f);
         tiredness_ = std::min(cfg::kMaxStat, tiredness_ + tiredRate * t.tirednessRate * dt);
     }
 
-    // Keine Nahrung mehr im Körper -> HP sinken
-    if (hunger_ >= cfg::kMaxStat) {
-        hp_ -= cfg::kStarvationDamagePerSecond * dt;
-        lastDamageCause_ = "Hunger";
+    // 3. Wärme / Kälte
+    float ambient = ctx.tribe.Buildings().GetWarmthAt(position_);
+    if (sleepingInShelter_) ambient += cfg::kWarmthRecoverInShelter;
+
+    if (ambient > 0.0f) {
+        warmth_ = std::min(100.0f, warmth_ + ambient * dt);
+    } else {
+        bool isNight = (ctx.timeOfDay > 0.72f || ctx.timeOfDay < 0.22f);
+        float lossRate = isNight ? cfg::kWarmthLossNight : cfg::kWarmthLossDay;
+        warmth_ = std::max(0.0f, warmth_ - lossRate * dt);
+
+        if (warmth_ <= 0.0f) {
+            TakeDamage(cfg::kColdDamagePerSecond * dt, "Kälte", ctx);
+        }
     }
+
+    // 4. Soziales Bedürfnis (Einsamkeit)
+    socialNeed_ = std::min(100.0f, socialNeed_ + 0.45f * dt);
+
+    // 5. Arbeitseifer & Motivation (beeinflusst von Persönlichkeit, Bedürfnissen & Beziehung zum Partner)
+    float targetMorale = 60.0f;
+    if (ctx.tribe.Stock().food > ctx.population * 2) targetMorale += 15.0f;
+    if (!ctx.tribe.NeedsMoreHuts(ctx.population))    targetMorale += 15.0f;
+    if (ctx.tribe.Relationships().GetPartner(id_) >= 0) targetMorale += 10.0f; // Partnerglück
+
+    if (hunger_ > 60.0f) targetMorale -= 30.0f;
+    if (warmth_ < 40.0f) targetMorale -= 30.0f;
+    if (tiredness_ > 75.0f) targetMorale -= 20.0f;
+    if (socialNeed_ > 80.0f) targetMorale -= 15.0f; // Einsamkeit
+
+    targetMorale = std::clamp(targetMorale, 10.0f, 100.0f);
+    morale_ += (targetMorale - morale_) * 0.1f * dt;
 }
 
 void Caveman::TakeDamage(float amount, const char* cause, WorldContext& ctx) {
@@ -163,196 +202,175 @@ void Caveman::TakeDamage(float amount, const char* cause, WorldContext& ctx) {
 }
 
 // ============================================================================
-//  "Denk"-Logik: wählt die wichtigste Absicht nach Prioritäten
+//  Situatives & logisches Handeln (Utility AI)
 // ============================================================================
 bool Caveman::IsBlocked(CavemanState state) const {
     return blockedTimer_ > 0.0f && blockedState_ == state;
 }
 
-Caveman::Intent Caveman::Think(const WorldContext& ctx) const {
-    const RoleTraits& t = GetRoleTraits(role_);
-    const Stockpile& stock = ctx.tribe.Stock();
+void Caveman::Think(WorldContext& ctx) {
+    UtilityDecision dec = UtilityAI::Evaluate(*this, ctx);
+    lastDecisionReason_ = dec.reason;
+    lastDecisionScore_ = dec.score;
 
-    const bool starving   = hunger_ >= cfg::kHungerCritical;
-    const bool hungry     = hunger_ > cfg::kHungerThreshold;
-    const bool needsSleep = tiredness_ > cfg::kTirednessThreshold || ap_ < cfg::kApMinForWork;
+    if (IsBlocked(dec.state)) return;
 
-    // 1) Müdigkeit > 80 (oder AP verbraucht): Schlafplatz/Hütte suchen und schlafen.
-    //    Ausnahme: kurz vor dem Verhungern geht Essen vor.
-    if (needsSleep && !starving && !IsBlocked(CavemanState::Sleeping))
-        return { CavemanState::Sleeping, kPrioSleep, ResourceType::Bush };
-
-    // 2) Hunger > 70: Lager prüfen, sonst Nahrung beschaffen
-    if (hungry) {
-        if (stock.food > 0 && !IsBlocked(CavemanState::Eating))
-            return { CavemanState::Eating, kPrioHunger, ResourceType::Bush };
-        if (t.canHunt && !IsBlocked(CavemanState::Hunting))
-            return { CavemanState::Hunting, kPrioHunger, ResourceType::Animal };
-        // Sammler suchen Beeren. Älteste & Kinder können nicht jagen und sammeln ebenfalls.
-        if (!IsBlocked(CavemanState::GatheringFood))
-            return { CavemanState::GatheringFood, kPrioHunger, ResourceType::Bush };
-    }
-
-    // 3) (Erweiterung) Vorrat anlegen, damit der Stamm nicht erst bei Hunger losläuft
-    const int reserveTarget = ctx.population * cfg::kFoodReservePerMember;
-    if (stock.food < reserveTarget) {
-        if (role_ == Role::Hunter && !IsBlocked(CavemanState::Hunting))
-            return { CavemanState::Hunting, kPrioProvision, ResourceType::Animal };
-        if (role_ == Role::Gatherer && !IsBlocked(CavemanState::GatheringFood))
-            return { CavemanState::GatheringFood, kPrioProvision, ResourceType::Bush };
-    }
-
-    // 4) Holz & Stein im Lager und keine dringenden Bedürfnisse: Hütte bauen
-    if (t.canBuild && !IsBlocked(CavemanState::Building)) {
-        if (ctx.tribe.HasConstructionSite() ||
-            (ctx.tribe.CanAffordHut() && ctx.tribe.NeedsMoreHuts(ctx.population)))
-            return { CavemanState::Building, kPrioBuild, ResourceType::Tree };
-    }
-
-    // 5) (Erweiterung) Fehlendes Baumaterial besorgen, solange Schlafplätze fehlen
-    if (t.canGatherMaterials && !ctx.tribe.HasConstructionSite() &&
-        ctx.tribe.NeedsMoreHuts(ctx.population) && !IsBlocked(CavemanState::GatheringMaterials)) {
-        const float woodNeed  = (float)std::max(0, cfg::kHutWoodCost - stock.wood) / (float)cfg::kHutWoodCost;
-        const float stoneNeed = (float)std::max(0, cfg::kHutStoneCost - stock.stone) / (float)cfg::kHutStoneCost;
-        if (woodNeed > 0.0f || stoneNeed > 0.0f) {
-            return { CavemanState::GatheringMaterials, kPrioMaterials,
-                     woodNeed >= stoneNeed ? ResourceType::Tree : ResourceType::Rock };
+    if (taskDone_ || (dec.score > lastDecisionScore_ + 0.15f && IsInterruptible())) {
+        if (!EnterState(dec.state, dec.resource, dec.targetBuildingId, dec.targetNodeId, dec.targetCharacterId, dec.targetPoiId, ctx)) {
+            blockedState_ = dec.state;
+            blockedTimer_ = kBlockDuration;
+            EnterState(CavemanState::Idle, ResourceType::Bush, -1, -1, -1, -1, ctx);
+            stateTimer_ = 1.0f;
         }
     }
-
-    // 6) Ansonsten: umherwandern oder am Lager verweilen
-    const bool wander = GetRandomValue(0, 99) < (role_ == Role::Child ? 75 : 55);
-    return { wander ? CavemanState::Wandering : CavemanState::Idle, kPrioIdle, ResourceType::Bush };
 }
 
 bool Caveman::IsInterruptible() const {
-    // Beute/Material erst abliefern, Kampf erst zu Ende bringen
     if (carryAmount_ > 0) return false;
     if (state_ == CavemanState::Hunting && phase_ == TaskPhase::Working) return false;
+    if (state_ == CavemanState::Expedition && phase_ == TaskPhase::Working) return false;
     return true;
-}
-
-void Caveman::ApplyIntent(const Intent& intent, WorldContext& ctx) {
-    // Gleicher Zustand läuft schon -> nur Priorität anpassen, Ziel behalten
-    if (!taskDone_ && intent.state == state_) {
-        currentPriority_ = intent.priority;
-        return;
-    }
-    if (EnterState(intent.state, intent.resource, ctx)) {
-        currentPriority_ = intent.priority;
-        return;
-    }
-    // Kein Ziel erreichbar -> diesen Zustand kurz meiden und kurz rasten
-    blockedState_ = intent.state;
-    blockedTimer_ = kBlockDuration;
-    EnterState(CavemanState::Idle, ResourceType::Bush, ctx);
-    stateTimer_ = 1.0f;
-    currentPriority_ = kPrioIdle;
 }
 
 // ============================================================================
 //  Zustandswechsel
 // ============================================================================
-Vector2 Caveman::PersonalOffset(float radius) const {
-    // Goldener Winkel -> jeder Mensch bekommt einen eigenen Platz um ein Ziel herum
-    const float angle = (float)id_ * 2.39996f;
-    return { std::cos(angle) * radius, std::sin(angle) * radius * 0.6f };
-}
-
-bool Caveman::EnterState(CavemanState newState, ResourceType resource, WorldContext& ctx) {
+bool Caveman::EnterState(CavemanState state, ResourceType resource, int targetBuildingId,
+                         int targetNodeId, int targetCharacterId, int targetPoiId, WorldContext& ctx) {
     ExitState(ctx);
-    state_ = newState;
+
+    state_ = state;
+    taskResource_ = resource;
     phase_ = TaskPhase::MovingToTarget;
     taskDone_ = false;
     stateTimer_ = 0.0f;
     workTimer_ = 0.0f;
-    repathTimer_ = 1.0f;
-    taskResource_ = resource;
 
-    switch (newState) {
-        case CavemanState::Idle:
-            stateTimer_ = (float)GetRandomValue(20, 50) / 10.0f;
-            targetPosition_ = position_;
+    switch (state) {
+        case CavemanState::Idle: {
+            stateTimer_ = (float)GetRandomValue(15, 30) / 10.0f;
             return true;
-
+        }
         case CavemanState::Wandering: {
-            // In Lagernähe bleiben, damit der Stamm zusammenhält
-            const float radius = (role_ == Role::Child ? 6.0f : 12.0f) * TILE_SIZE;
+            stateTimer_ = (float)GetRandomValue(40, 80) / 10.0f;
             Vector2 dest;
-            if (!ctx.world.FindRandomWalkablePosition(ctx.tribe.CampPosition(), radius, dest, 20)) return false;
-            stateTimer_ = 25.0f;
-            return SetDestination(ctx, dest);
+            if (ctx.world.FindRandomWalkablePosition(position_, 60.0f, dest, 20)) {
+                return SetDestination(ctx, dest);
+            }
+            return false;
         }
-
         case CavemanState::Hunting: {
-            const int idx = ctx.resources.FindBest(ResourceType::Animal, position_);
-            const ResourceNode* prey = ctx.resources.Get(idx);
-            if (!prey || !SetDestination(ctx, prey->position)) return false;
-            targetNode_ = idx;
+            targetNode_ = targetNodeId;
+            ctx.resources.Claim(targetNode_);
+            ResourceNode* prey = ctx.resources.Get(targetNode_);
+            if (!prey || !prey->IsAvailable()) return false;
             targetGeneration_ = prey->generation;
-            ctx.resources.Claim(idx);
-            return true;
+            repathTimer_ = 0.5f;
+            return SetDestination(ctx, prey->position);
         }
-
         case CavemanState::GatheringFood:
         case CavemanState::GatheringMaterials: {
-            if (newState == CavemanState::GatheringFood) taskResource_ = ResourceType::Bush;
-            const int idx = ctx.resources.FindBest(taskResource_, position_);
-            const ResourceNode* node = ctx.resources.Get(idx);
-            if (!node || !SetDestination(ctx, Vector2Add(node->position, PersonalOffset(5.0f)))) return false;
-            targetNode_ = idx;
+            targetNode_ = targetNodeId;
+            ctx.resources.Claim(targetNode_);
+            ResourceNode* node = ctx.resources.Get(targetNode_);
+            if (!node || !node->IsAvailable()) return false;
             targetGeneration_ = node->generation;
-            ctx.resources.Claim(idx);
-            return true;
+            return SetDestination(ctx, node->position);
         }
-
         case CavemanState::Building: {
-            const int site = ctx.tribe.EnsureConstructionSite(ctx.world, ctx.log);
-            Hut* hut = ctx.tribe.GetHut(site);
-            if (!hut || !SetDestination(ctx, Vector2Add(hut->position, PersonalOffset(13.0f)))) return false;
-            targetHut_ = site;
-            hut->builders++;
-            return true;
+            targetBuilding_ = targetBuildingId;
+            Building* b = ctx.tribe.Buildings().Get(targetBuilding_);
+            if (!b || !b->NeedsWork()) return false;
+            b->builders++;
+            return SetDestination(ctx, b->position);
         }
-
-        case CavemanState::Eating:
-            if (ctx.tribe.Stock().food <= 0) return false;
-            return SetDestination(ctx, Vector2Add(ctx.tribe.StockpilePosition(), PersonalOffset(10.0f)));
-
-        case CavemanState::Sleeping: {
-            // Nächste Hütte mit freiem Platz, sonst unter freiem Himmel am Feuer
-            Vector2 dest;
-            const int hutIdx = ctx.tribe.FindSleepingHut(position_);
-            if (Hut* hut = ctx.tribe.GetHut(hutIdx)) {
-                const float slotX = -8.0f + 8.0f * (float)(hut->sleepers % cfg::kHutCapacity);
-                dest = { hut->position.x + slotX, hut->position.y + 7.0f };
-                hut->sleepers++;
-                targetHut_ = hutIdx;
-                sleepingInHut_ = true;
-            } else {
-                dest = Vector2Add(ctx.tribe.CampPosition(), PersonalOffset(28.0f));
-            }
-            if (!SetDestination(ctx, dest)) {
-                path_.clear();
-                phase_ = TaskPhase::Working;   // kein Weg -> an Ort und Stelle schlafen
-            }
-            return true;
+        case CavemanState::Crafting: {
+            targetBuilding_ = targetBuildingId;
+            Building* b = ctx.tribe.Buildings().Get(targetBuilding_);
+            if (!b || b->type != BuildingType::CraftBench || !b->finished) return false;
+            b->occupants++;
+            return SetDestination(ctx, b->position);
         }
-
-        case CavemanState::Dead:
+        case CavemanState::WarmingUp: {
+            targetBuilding_ = targetBuildingId;
+            Vector2 dest = ctx.tribe.CampPosition();
+            if (Building* b = ctx.tribe.Buildings().Get(targetBuilding_)) {
+                dest = b->position;
+            }
+            return SetDestination(ctx, dest);
+        }
+        case CavemanState::Socializing: {
+            targetSocialPartner_ = targetCharacterId;
+            if (ctx.allCavemen) {
+                for (const auto& c : *ctx.allCavemen) {
+                    if (c.Id() == targetSocialPartner_ && !c.IsDead()) {
+                        return SetDestination(ctx, c.Position());
+                    }
+                }
+            }
             return false;
+        }
+        case CavemanState::Expedition: {
+            targetPoi_ = targetPoiId;
+            PointOfInterest* poi = ctx.tribe.POIs().Get(targetPoi_);
+            if (!poi || !poi->CanBeExplored()) return false;
+
+            carryingTorch_ = poi->gear.torch;
+            if (poi->gear.torch && ctx.tribe.Stock().torches > 0) ctx.tribe.Stock().torches--;
+            if (poi->gear.provisions && ctx.tribe.Stock().food > 0) ctx.tribe.Stock().food--;
+
+            poi->assignedExplorerId = id_;
+            ctx.log.Add(TextFormat("%s bricht zur Expedition nach '%s' auf!", name_.c_str(), poi->name.c_str()), GOLD);
+            return SetDestination(ctx, poi->position);
+        }
+        case CavemanState::Sleeping: {
+            targetBuilding_ = targetBuildingId;
+            if (Building* b = ctx.tribe.Buildings().Get(targetBuilding_)) {
+                b->occupants++;
+                sleepingInShelter_ = true;
+                return SetDestination(ctx, b->position);
+            }
+            sleepingInShelter_ = false;
+            Vector2 spot;
+            if (ctx.world.FindRandomWalkablePosition(ctx.tribe.CampPosition(), 24.0f, spot, 15)) {
+                return SetDestination(ctx, spot);
+            }
+            return SetDestination(ctx, ctx.tribe.CampPosition());
+        }
+        case CavemanState::Eating: {
+            return SetDestination(ctx, ctx.tribe.StockpilePosition());
+        }
+        case CavemanState::Dead:
+            return true;
     }
     return false;
 }
 
 void Caveman::ExitState(WorldContext& ctx) {
     ReleaseNode(ctx);
-    if (Hut* hut = ctx.tribe.GetHut(targetHut_)) {
-        if (state_ == CavemanState::Building) hut->builders = std::max(0, hut->builders - 1);
-        if (state_ == CavemanState::Sleeping && sleepingInHut_) hut->sleepers = std::max(0, hut->sleepers - 1);
+    ReleaseBuilding(ctx);
+    targetSocialPartner_ = -1;
+    if (targetPoi_ >= 0) {
+        if (PointOfInterest* poi = ctx.tribe.POIs().Get(targetPoi_)) {
+            if (poi->assignedExplorerId == id_ && poi->state != POIState::Explored) {
+                poi->assignedExplorerId = -1;
+                if (poi->state == POIState::Exploring) poi->state = POIState::Discovered;
+            }
+        }
     }
-    targetHut_ = -1;
-    sleepingInHut_ = false;
+    targetPoi_ = -1;
+    carryingTorch_ = false;
+}
+
+void Caveman::ReleaseBuilding(WorldContext& ctx) {
+    if (targetBuilding_ >= 0) {
+        if (Building* b = ctx.tribe.Buildings().Get(targetBuilding_)) {
+            if (state_ == CavemanState::Building && b->builders > 0) b->builders--;
+            if ((state_ == CavemanState::Sleeping || state_ == CavemanState::Crafting) && b->occupants > 0) b->occupants--;
+        }
+    }
+    targetBuilding_ = -1;
+    sleepingInShelter_ = false;
     path_.clear();
     pathIndex_ = 0;
 }
@@ -370,6 +388,14 @@ void Caveman::Die(WorldContext& ctx) {
     hp_ = 0.0f;
     state_ = CavemanState::Dead;
     taskDone_ = false;
+
+    // Wenn Figur einen Lebenspartner hat: Trauer und Partner auflösen
+    int partnerId = ctx.tribe.Relationships().GetPartner(id_);
+    if (partnerId >= 0) {
+        ctx.tribe.Relationships().BreakPartnership(id_, partnerId);
+        ctx.log.Add(TextFormat("%s trauert tief um den verstorbenen Lebenspartner %s!",
+                               name_.c_str(), RoleName(role_)), { 200, 100, 180, 255 });
+    }
 
     const bool starved = std::string(lastDamageCause_) == "Hunger";
     ctx.log.Add(TextFormat("%s (%s) %s", name_.c_str(), RoleName(role_),
@@ -395,7 +421,7 @@ void Caveman::UpdateHunting(WorldContext& ctx, float dt) {
 
     ResourceNode* prey = ctx.resources.Get(targetNode_);
     if (!prey || !ctx.resources.IsValidTarget(targetNode_, targetGeneration_)) {
-        FinishTask();   // Beute ist weg (z. B. von einem anderen Jäger erlegt)
+        FinishTask();
         return;
     }
 
@@ -407,7 +433,6 @@ void Caveman::UpdateHunting(WorldContext& ctx, float dt) {
             workTimer_ = 0.0f;
             return;
         }
-        // Das Tier bewegt sich -> Pfad regelmäßig aktualisieren
         repathTimer_ -= dt;
         if (repathTimer_ <= 0.0f) {
             repathTimer_ = 1.0f;
@@ -423,7 +448,7 @@ void Caveman::UpdateHunting(WorldContext& ctx, float dt) {
         return;
     }
 
-    // Working: Kampf. Kostet AP, das Tier kann zurückschlagen.
+    // Kampf
     const RoleTraits& t = GetRoleTraits(role_);
     prey->engaged = true;
     facingLeft_ = prey->position.x < position_.x;
@@ -450,7 +475,7 @@ void Caveman::UpdateHarvesting(WorldContext& ctx, float dt) {
     if (phase_ == TaskPhase::Returning) { UpdateReturning(ctx, dt); return; }
 
     if (!ctx.resources.IsValidTarget(targetNode_, targetGeneration_)) {
-        FinishTask();   // erschöpft -> beim nächsten Denken neues Ziel
+        FinishTask();
         return;
     }
 
@@ -466,7 +491,6 @@ void Caveman::UpdateHarvesting(WorldContext& ctx, float dt) {
         return;
     }
 
-    // Working: ernten
     float duration = cfg::kGatherFoodDuration;
     float apCost = cfg::kApCostGather;
     int yield = cfg::kBerryYield;
@@ -491,8 +515,8 @@ void Caveman::UpdateHarvesting(WorldContext& ctx, float dt) {
 }
 
 void Caveman::UpdateBuilding(WorldContext& ctx, float dt) {
-    Hut* hut = ctx.tribe.GetHut(targetHut_);
-    if (!hut || hut->finished) { FinishTask(); return; }
+    Building* b = ctx.tribe.Buildings().Get(targetBuilding_);
+    if (!b || !b->NeedsWork()) { FinishTask(); return; }
 
     if (phase_ == TaskPhase::MovingToTarget) {
         const MoveResult r = MoveAlongPath(ctx, dt);
@@ -501,30 +525,185 @@ void Caveman::UpdateBuilding(WorldContext& ctx, float dt) {
         return;
     }
 
-    // Working: AP in Baufortschritt umwandeln
-    facingLeft_ = hut->position.x < position_.x;
+    facingLeft_ = b->position.x < position_.x;
     if (ap_ <= 0.0f) { FinishTask(); return; }
 
     const RoleTraits& t = GetRoleTraits(role_);
     SpendAp(cfg::kApCostBuild * dt);
-    if (ctx.tribe.AddBuildProgress(targetHut_, cfg::kBuildRatePerSecond * t.buildEfficiency * dt, ctx.log))
+    float progress = cfg::kBuildRatePerSecond * t.buildEfficiency * dt;
+    if (ctx.tribe.Buildings().AddBuildProgress(targetBuilding_, progress, ctx.tribe.Stock(), ctx.log)) {
         FinishTask();
+    }
+}
+
+void Caveman::UpdateCrafting(WorldContext& ctx, float dt) {
+    Building* b = ctx.tribe.Buildings().Get(targetBuilding_);
+    if (!b || b->type != BuildingType::CraftBench || !b->finished) { FinishTask(); return; }
+
+    if (phase_ == TaskPhase::MovingToTarget) {
+        const MoveResult r = MoveAlongPath(ctx, dt);
+        if (r == MoveResult::Failed) FinishTask();
+        else if (r == MoveResult::Arrived) { phase_ = TaskPhase::Working; workTimer_ = 0.0f; }
+        return;
+    }
+
+    facingLeft_ = b->position.x < position_.x;
+    SpendAp(cfg::kApCostCraft * dt);
+    workTimer_ += dt;
+
+    if (workTimer_ >= cfg::kCraftDuration) {
+        workTimer_ = 0.0f;
+        if (ctx.tribe.CanCraftPlanks() && ctx.tribe.Stock().planks < 15) {
+            ctx.tribe.CraftPlank();
+            ctx.log.Add(TextFormat("%s hat 1 Holzbalken an der Werkbank hergestellt!", name_.c_str()), { 230, 160, 90, 255 });
+            FinishTask();
+        } else if (ctx.tribe.CanCraftBricks() && ctx.tribe.Stock().bricks < 10) {
+            ctx.tribe.CraftBrick();
+            ctx.log.Add(TextFormat("%s hat 1 Steinziegel an der Werkbank behauen!", name_.c_str()), { 180, 180, 195, 255 });
+            FinishTask();
+        } else {
+            FinishTask();
+        }
+    }
+}
+
+void Caveman::UpdateWarmingUp(WorldContext& ctx, float dt) {
+    if (phase_ == TaskPhase::MovingToTarget) {
+        const MoveResult r = MoveAlongPath(ctx, dt);
+        if (r == MoveResult::Failed) FinishTask();
+        else if (r == MoveResult::Arrived) phase_ = TaskPhase::Working;
+        return;
+    }
+
+    float ambient = ctx.tribe.Buildings().GetWarmthAt(position_);
+    warmth_ = std::min(100.0f, warmth_ + std::max(ambient, cfg::kWarmthRecoverNearFire) * dt);
+    ap_ = std::min(100.0f, ap_ + 3.0f * dt);
+
+    if (warmth_ >= 90.0f) {
+        FinishTask();
+    }
+}
+
+void Caveman::UpdateSocializing(WorldContext& ctx, float dt) {
+    if (!ctx.allCavemen) { FinishTask(); return; }
+
+    Caveman* partner = nullptr;
+    for (auto& c : *ctx.allCavemen) {
+        if (c.Id() == targetSocialPartner_ && !c.IsDead()) {
+            partner = &c;
+            break;
+        }
+    }
+
+    if (!partner) { FinishTask(); return; }
+
+    if (phase_ == TaskPhase::MovingToTarget) {
+        if (Vector2Distance(position_, partner->Position()) <= cfg::kInteractRange * 1.8f) {
+            phase_ = TaskPhase::Working;
+            workTimer_ = 0.0f;
+            return;
+        }
+
+        repathTimer_ -= dt;
+        if (repathTimer_ <= 0.0f) {
+            repathTimer_ = 0.8f;
+            SetDestination(ctx, partner->Position());
+        }
+
+        MoveResult r = MoveAlongPath(ctx, dt);
+        if (r == MoveResult::Failed) FinishTask();
+        return;
+    }
+
+    // Interaktion durchführen (Reden, Klatsch, Flirten)
+    facingLeft_ = partner->Position().x < position_.x;
+    workTimer_ += dt;
+
+    if (workTimer_ >= 1.4f) {
+        SocialActionEvaluator::ExecuteSocialize(*this, *partner, ctx);
+        morale_ = std::min(100.0f, morale_ + 10.0f);
+        partner->morale_ = std::min(100.0f, partner->morale_ + 10.0f);
+        FinishTask();
+    }
+}
+
+void Caveman::UpdateExpedition(WorldContext& ctx, float dt) {
+    PointOfInterest* poi = ctx.tribe.POIs().Get(targetPoi_);
+    if (!poi) { FinishTask(); return; }
+
+    if (phase_ == TaskPhase::MovingToTarget) {
+        MoveResult r = MoveAlongPath(ctx, dt);
+        float distToPoi = Vector2Distance(position_, poi->position);
+        if (r == MoveResult::Arrived || distToPoi <= 22.0f) {
+            phase_ = TaskPhase::Working;
+            workTimer_ = 0.0f;
+            poi->state = POIState::Exploring;
+            poi->assignedExplorerId = id_;
+            ctx.log.Add(TextFormat("%s hat %s erreicht und erforscht den Ort!", name_.c_str(), poi->name.c_str()), POIColor(poi->type));
+        } else if (r == MoveResult::Failed) {
+            FinishTask();
+        }
+        return;
+    }
+
+    if (phase_ == TaskPhase::Working) {
+        facingLeft_ = poi->position.x < position_.x;
+        SpendAp(cfg::kApCostMaterials * 0.4f * dt);
+        workTimer_ += dt * WorkFactor(1.0f);
+        poi->explorationProgress = std::clamp(workTimer_ / cfg::kExpeditionDuration, 0.0f, 1.0f);
+
+        if (workTimer_ >= cfg::kExpeditionDuration) {
+            poi->explorationProgress = 1.0f;
+            carryType_ = CarryType::Discovery;
+            carryAmount_ = 1;
+            phase_ = TaskPhase::Returning;
+            ctx.log.Add(TextFormat("%s hat neue Erkenntnisse in '%s' geborgen und kehrt zurück!", name_.c_str(), poi->name.c_str()), GOLD);
+            SetDestination(ctx, ctx.tribe.CampPosition());
+        }
+        return;
+    }
+
+    if (phase_ == TaskPhase::Returning) {
+        MoveResult r = MoveAlongPath(ctx, dt);
+        float distToCamp = Vector2Distance(position_, ctx.tribe.CampPosition());
+        if (r == MoveResult::Arrived || distToCamp <= 24.0f) {
+            poi->state = POIState::Explored;
+            poi->assignedExplorerId = -1;
+
+            // Assoziierte Technologie im Skilltree freischalten
+            for (const auto& node : ctx.tribe.Skills().AllNodes()) {
+                if (node.requiresPOI && node.targetPOIType == poi->type) {
+                    ctx.tribe.Skills().CompleteNode(node.id, ctx.log);
+                }
+            }
+
+            morale_ = std::min(100.0f, morale_ + cfg::kExpeditionMoraleBoost);
+            memory_.Add(MemoryType::SavedInCombat, id_, 20.0f);
+
+            carryType_ = CarryType::None;
+            carryAmount_ = 0;
+            carryingTorch_ = false;
+            targetPoi_ = -1;
+            FinishTask();
+        } else if (r == MoveResult::Failed) {
+            FinishTask();
+        }
+    }
 }
 
 void Caveman::UpdateSleeping(WorldContext& ctx, float dt) {
     if (phase_ == TaskPhase::MovingToTarget) {
-        if (MoveAlongPath(ctx, dt) != MoveResult::Moving) phase_ = TaskPhase::Working;   // angekommen -> hinlegen
+        if (MoveAlongPath(ctx, dt) != MoveResult::Moving) phase_ = TaskPhase::Working;
         return;
     }
 
-    // Schlafen: Müdigkeit sinkt, AP regenerieren (in Hütten schneller)
-    const float bonus = sleepingInHut_ ? cfg::kHutSleepBonus : 1.0f;
+    const float bonus = sleepingInShelter_ ? cfg::kHutSleepBonus : 1.0f;
     tiredness_ = std::max(0.0f, tiredness_ - cfg::kSleepTirednessRecovery * bonus * dt);
     ap_ = std::min(cfg::kMaxStat, ap_ + cfg::kSleepApRegen * bonus * dt);
     if (hunger_ < cfg::kHungerThreshold) hp_ = std::min(cfg::kMaxStat, hp_ + cfg::kSleepHpRegen * dt);
 
     const bool rested = tiredness_ <= cfg::kWakeTiredness && ap_ >= cfg::kWakeAp;
-    if (rested || hunger_ >= cfg::kHungerCritical) FinishTask();   // ausgeschlafen oder Hunger weckt
+    if (rested || hunger_ >= cfg::kHungerCritical) FinishTask();
 }
 
 void Caveman::UpdateEating(WorldContext& ctx, float dt) {
@@ -539,7 +718,7 @@ void Caveman::UpdateEating(WorldContext& ctx, float dt) {
     if (workTimer_ >= cfg::kEatInterval) {
         workTimer_ -= cfg::kEatInterval;
         Stockpile& stock = ctx.tribe.Stock();
-        if (stock.food <= 0) { FinishTask(); return; }   // jemand war schneller
+        if (stock.food <= 0) { FinishTask(); return; }
         stock.food--;
         hunger_ = std::max(0.0f, hunger_ - cfg::kHungerPerFood);
     }
@@ -547,198 +726,183 @@ void Caveman::UpdateEating(WorldContext& ctx, float dt) {
 }
 
 void Caveman::UpdateReturning(WorldContext& ctx, float dt) {
-    // Bei Erfolg ODER wenn kein Weg mehr existiert: abliefern
-    if (MoveAlongPath(ctx, dt) != MoveResult::Moving) {
+    const MoveResult r = MoveAlongPath(ctx, dt);
+    if (r == MoveResult::Arrived || r == MoveResult::Failed) {
         DeliverCarry(ctx);
         FinishTask();
     }
-}
-
-// ============================================================================
-//  Bewegung & Hilfsfunktionen
-// ============================================================================
-bool Caveman::SetDestination(WorldContext& ctx, Vector2 target) {
-    targetPosition_ = target;
-    path_.clear();
-    pathIndex_ = 0;
-    if (Vector2Distance(position_, target) < 1.0f) return true;
-    return ctx.world.FindPath(position_, target, path_);
-}
-
-Caveman::MoveResult Caveman::MoveAlongPath(WorldContext& ctx, float dt) {
-    if (pathIndex_ >= path_.size()) return MoveResult::Arrived;
-
-    const RoleTraits& t = GetRoleTraits(role_);
-    float speed = t.moveSpeed;
-    if (hunger_ >= cfg::kMaxStat) speed *= 0.6f;   // geschwächt
-    if (ap_ <= 0.0f) speed *= 0.8f;
-
-    float remaining = speed * dt;
-    while (remaining > 0.0f && pathIndex_ < path_.size()) {
-        const Vector2 waypoint = path_[pathIndex_];
-        const Vector2 delta = Vector2Subtract(waypoint, position_);
-        const float dist = Vector2Length(delta);
-        if (dist > 0.001f && std::fabs(delta.x) / dist > 0.2f) facingLeft_ = delta.x < 0.0f;
-
-        if (dist <= remaining) {
-            position_ = waypoint;
-            remaining -= dist;
-            ++pathIndex_;
-            continue;
-        }
-
-        const Vector2 next = Vector2Add(position_, Vector2Scale(delta, remaining / dist));
-        if (!ctx.world.IsWalkable(next) && ctx.world.IsWalkable(position_)) {
-            // Gelände wurde (z. B. vom Spieler) verändert -> neu planen
-            if (!SetDestination(ctx, targetPosition_)) return MoveResult::Failed;
-            isMoving_ = true;
-            return MoveResult::Moving;
-        }
-        position_ = next;
-        remaining = 0.0f;
-    }
-
-    isMoving_ = true;
-    return pathIndex_ >= path_.size() ? MoveResult::Arrived : MoveResult::Moving;
 }
 
 void Caveman::StartReturning(WorldContext& ctx, CarryType type, int amount) {
     carryType_ = type;
     carryAmount_ = amount;
     phase_ = TaskPhase::Returning;
-    if (!SetDestination(ctx, Vector2Add(ctx.tribe.StockpilePosition(), PersonalOffset(8.0f)))) {
-        DeliverCarry(ctx);
-        FinishTask();
-    }
+    SetDestination(ctx, ctx.tribe.StockpilePosition());
 }
 
 void Caveman::DeliverCarry(WorldContext& ctx) {
+    if (carryAmount_ <= 0) { carryType_ = CarryType::None; return; }
     Stockpile& stock = ctx.tribe.Stock();
     switch (carryType_) {
-        case CarryType::Food:  stock.food  += carryAmount_; break;
-        case CarryType::Wood:  stock.wood  += carryAmount_; break;
-        case CarryType::Stone: stock.stone += carryAmount_; break;
-        case CarryType::None:  break;
+        case CarryType::Food:   stock.food += carryAmount_; break;
+        case CarryType::Wood:   stock.wood += carryAmount_; break;
+        case CarryType::Stone:  stock.stone += carryAmount_; break;
+        case CarryType::Planks: stock.planks += carryAmount_; break;
+        case CarryType::Bricks: stock.bricks += carryAmount_; break;
+        case CarryType::Tools:  stock.tools += carryAmount_; break;
+        case CarryType::Discovery:
+        case CarryType::None:   break;
     }
     carryType_ = CarryType::None;
     carryAmount_ = 0;
 }
 
+// ============================================================================
+//  Bewegung & Pathfinding
+// ============================================================================
+bool Caveman::SetDestination(WorldContext& ctx, Vector2 target) {
+    targetPosition_ = target;
+    pathIndex_ = 0;
+    return ctx.world.FindPath(position_, target, path_);
+}
+
+Caveman::MoveResult Caveman::MoveAlongPath(WorldContext& ctx, float dt) {
+    (void)ctx;
+    if (path_.empty() || pathIndex_ >= path_.size()) return MoveResult::Arrived;
+
+    const RoleTraits& t = GetRoleTraits(role_);
+    const float speed = t.moveSpeed;
+    float step = speed * dt;
+    isMoving_ = true;
+
+    while (step > 0.0f && pathIndex_ < path_.size()) {
+        const Vector2 next = path_[pathIndex_];
+        const float dist = Vector2Distance(position_, next);
+
+        if (dist <= step) {
+            position_ = next;
+            step -= dist;
+            pathIndex_++;
+        } else {
+            const Vector2 dir = Vector2Normalize(Vector2Subtract(next, position_));
+            position_ = Vector2Add(position_, Vector2Scale(dir, step));
+            facingLeft_ = dir.x < 0.0f;
+            step = 0.0f;
+        }
+    }
+
+    if (pathIndex_ >= path_.size()) {
+        path_.clear();
+        pathIndex_ = 0;
+        return MoveResult::Arrived;
+    }
+    return MoveResult::Moving;
+}
+
 float Caveman::WorkFactor(float efficiency) const {
-    return efficiency * (ap_ > 0.0f ? 1.0f : cfg::kLowApWorkFactor);
+    return efficiency * (ap_ <= 0.0f ? cfg::kLowApWorkFactor : 1.0f);
 }
 
 void Caveman::SpendAp(float amount) {
     ap_ = std::max(0.0f, ap_ - amount);
 }
 
+Vector2 Caveman::PersonalOffset(float radius) const {
+    const float a = (float)(id_ * 73 % 360) / 180.0f * PI;
+    return { std::cos(a) * radius, std::sin(a) * radius * 0.5f };
+}
+
 std::string Caveman::ActivityText() const {
-    const bool moving = phase_ == TaskPhase::MovingToTarget;
-    const bool returning = phase_ == TaskPhase::Returning;
     switch (state_) {
-        case CavemanState::Idle:      return "Rastet";
-        case CavemanState::Wandering: return "Streift umher";
-        case CavemanState::Hunting:
-            return moving ? "Pirscht sich an" : returning ? "Bringt Fleisch heim" : "Kämpft mit Wildtier";
-        case CavemanState::GatheringFood:
-            return moving ? "Sucht Beeren" : returning ? "Bringt Beeren heim" : "Pflückt Beeren";
-        case CavemanState::GatheringMaterials:
-            if (taskResource_ == ResourceType::Rock)
-                return moving ? "Geht zum Fels" : returning ? "Trägt Stein zum Lager" : "Schlägt Stein";
-            return moving ? "Geht zum Baum" : returning ? "Trägt Holz zum Lager" : "Fällt Holz";
-        case CavemanState::Building:  return moving ? "Geht zur Baustelle" : "Baut Hütte";
-        case CavemanState::Sleeping:
-            if (moving) return sleepingInHut_ ? "Geht zur Hütte" : "Sucht Schlafplatz";
-            return sleepingInHut_ ? "Schläft (Hütte)" : "Schläft (draußen)";
-        case CavemanState::Eating:    return moving ? "Geht zum Lager" : "Isst";
-        case CavemanState::Dead:      return "Tot";
+        case CavemanState::Idle:               return "Verweilt am Ort";
+        case CavemanState::Wandering:          return "Erkundet die Gegend";
+        case CavemanState::Hunting:            return "Auf der Jagd nach Wild";
+        case CavemanState::GatheringFood:      return "Sammelt Beeren";
+        case CavemanState::GatheringMaterials: return (taskResource_ == ResourceType::Tree) ? "Fällt Holz" : "Schlägt Steine";
+        case CavemanState::Building:           return "Errichtet Siedlungsbau";
+        case CavemanState::Crafting:           return "Veredelt Güter an Werkbank";
+        case CavemanState::WarmingUp:          return "Wärmt sich am Feuer auf";
+        case CavemanState::Socializing:        return "Im Gespräch mit Stammesmitglied";
+        case CavemanState::Expedition:         return (phase_ == TaskPhase::Working) ? "Erforscht Entdeckungsort" : (phase_ == TaskPhase::Returning) ? "Bringt Forschungswissen zurück" : "Auf Expedition zu POI";
+        case CavemanState::Sleeping:           return sleepingInShelter_ ? "Schläft in Unterkunft" : "Schläft im Freien";
+        case CavemanState::Eating:             return "Isst aus dem Vorrat";
+        case CavemanState::Dead:               return "Verstorben";
     }
-    return "";
+    return "?";
+}
+
+std::string Caveman::GetSocialSummary(const Tribe& tribe) const {
+    int clanId = tribe.Hierarchy().GetClanId(id_);
+    const Clan* clan = tribe.Hierarchy().GetClan(clanId);
+    std::string clanName = clan ? clan->name : "Stammlos";
+    SocialRank rank = tribe.Hierarchy().GetRank(id_);
+
+    int partner = tribe.Relationships().GetPartner(id_);
+    std::string partnerStr = (partner >= 0) ? TextFormat("Partner: #%d", partner) : "Kein Partner";
+
+    auto friends = tribe.Relationships().GetFriends(id_);
+    auto enemies = tribe.Relationships().GetEnemies(id_);
+
+    return TextFormat("%s | %s | %s | Wesen: %s | Freunde: %d | Rivalen: %d",
+                      clanName.c_str(), SocialRankName(rank), partnerStr.c_str(),
+                      personality_.GetPrimaryTraitDescription().c_str(),
+                      (int)friends.size(), (int)enemies.size());
 }
 
 // ============================================================================
 //  Zeichnen
 // ============================================================================
 void Caveman::Draw(const SpriteSheet& sheet, bool highlighted) const {
-    if (IsDead()) return;   // Tote werden nicht gezeichnet
+    if (IsDead()) {
+        DrawLineEx({ position_.x - 4, position_.y - 5 }, { position_.x + 4, position_.y + 5 }, 1.5f, Fade(RED, 0.7f));
+        DrawLineEx({ position_.x + 4, position_.y - 5 }, { position_.x - 4, position_.y + 5 }, 1.5f, Fade(RED, 0.7f));
+        return;
+    }
+
+    // Fackellicht bei Nacht/Expedition
+    if (carryingTorch_) {
+        DrawCircleGradient(position_, cfg::kExpeditionTorchLight,
+                           Fade(ORANGE, 0.25f), Fade(YELLOW, 0.0f));
+    }
 
     const RoleTraits& t = GetRoleTraits(role_);
-    const bool asleep = state_ == CavemanState::Sleeping && phase_ == TaskPhase::Working;
-    const bool working = phase_ == TaskPhase::Working && !asleep;
-    const float x = position_.x, y = position_.y;
-    const float spriteHeight = sheet.Config().drawHeight * (role_ == Role::Child ? 0.8f : 1.0f);
-
-    DrawEllipse((int)x, (int)y, 5, 2, Fade(BLACK, 0.3f));
-    if (highlighted) DrawEllipseLines((int)x, (int)y, 8, 3, YELLOW);
-
-    const Color tint = damageFlash_ > 0.0f ? Color{ 255, 110, 110, 255 } : WHITE;
-
-    if (sheet.IsLoaded()) {
-        // Pose (Spalte) aus Zustand + Bewegung bestimmen; Zeile = Rolle
-        const int row = t.spriteRow;
-        int col = sheet.IdleColumn();
-        if (asleep) {
-            col = sheet.SleepColumn();
-        } else if (isMoving_) {
-            col = sheet.WalkColumn(row, (int)(animTime_ * cfg::kWalkAnimFps));   // Spalten 1-3 abwechselnd
-        } else if (working) {
-            const bool alt = std::fmod(animTime_, cfg::kWorkAnimInterval * 2.0f) < cfg::kWorkAnimInterval;
-            switch (state_) {
-                case CavemanState::Hunting:            col = alt ? sheet.ActionColumn() : sheet.IdleColumn(); break;
-                case CavemanState::GatheringFood:      col = sheet.ActionColumn(); break;
-                case CavemanState::GatheringMaterials: col = alt ? sheet.ActionColumn() : sheet.CraftColumn(); break;
-                case CavemanState::Building:           col = alt ? sheet.CraftColumn() : sheet.IdleColumn(); break;
-                case CavemanState::Eating:
-                    col = role_ == Role::Elder ? sheet.ActionColumn() : sheet.IdleColumn(); break;
-                default: break;
-            }
-        }
-        sheet.Draw(row, col, position_, facingLeft_, tint);
-    } else {
-        // Fallback ohne Sprite-Sheet: farbige Figur
-        const Color body = RoleColor(role_);
-        if (asleep) {
-            DrawEllipse((int)x, (int)(y - 2), 6, 2, body);
-        } else {
-            const float bob = isMoving_ ? std::fabs(std::sin(animTime_ * 10.0f)) * 1.5f : 0.0f;
-            DrawRectangleRec({ x - 2.5f, y - spriteHeight * 0.65f - bob, 5.0f, spriteHeight * 0.65f }, body);
-            DrawCircleV({ x, y - spriteHeight * 0.75f - bob }, 3.0f, { 240, 190, 150, 255 });
-        }
+    int frame = 0;
+    if (isMoving_) {
+        frame = 1 + (int)(animTime_ * cfg::kWalkAnimFps) % 4;
     }
 
-    // --- Overlays --------------------------------------------------------------
-    const float headY = asleep ? y - 9.0f : y - spriteHeight - 2.0f;
+    Color tint = (damageFlash_ > 0.0f) ? RED : WHITE;
+    sheet.Draw(t.spriteRow, frame, position_, facingLeft_, tint);
 
-    if (carryAmount_ > 0) {
-        const Vector2 c = { x, headY - 2.0f };
-        switch (carryType_) {
-            case CarryType::Food:  DrawCircleV(c, 2.0f, { 210, 50, 60, 255 }); break;
-            case CarryType::Wood:  DrawRectangleRec({ c.x - 3.0f, c.y - 1.0f, 6.0f, 2.2f }, { 130, 85, 40, 255 }); break;
-            case CarryType::Stone: DrawCircleV(c, 1.8f, { 160, 158, 155, 255 }); break;
-            case CarryType::None:  break;
-        }
+    // Expeditions-Rucksack
+    if (state_ == CavemanState::Expedition) {
+        int packX = (int)position_.x + (facingLeft_ ? 3 : -7);
+        DrawRectangle(packX, (int)position_.y - 8, 4, 6, Color{ 115, 75, 45, 255 });
+        DrawRectangleLines(packX, (int)position_.y - 8, 4, 6, Color{ 70, 45, 25, 255 });
     }
 
-    if (hp_ < cfg::kMaxStat || highlighted) {
-        const float w = 12.0f;
-        DrawRectangleRec({ x - w * 0.5f, headY - 6.0f, w, 1.6f }, Fade(BLACK, 0.6f));
-        DrawRectangleRec({ x - w * 0.5f, headY - 6.0f, w * hp_ / cfg::kMaxStat, 1.6f },
-                         hp_ > 50.0f ? GREEN : (hp_ > 25.0f ? ORANGE : RED));
+    // Getragene Fackel
+    if (carryingTorch_) {
+        Vector2 torchHand = { position_.x + (facingLeft_ ? -8.0f : 8.0f), position_.y - 4.0f };
+        DrawLineEx(torchHand, { torchHand.x, torchHand.y - 7.0f }, 1.5f, BROWN);
+        DrawCircleV({ torchHand.x, torchHand.y - 8.0f }, 2.0f, ORANGE);
+        DrawPixel((int)torchHand.x, (int)torchHand.y - 8, YELLOW);
     }
 
-    if (asleep) {
-        const float rise = std::fmod(animTime_, 1.5f) / 1.5f;
-        DrawText("z", (int)(x + 4.0f + rise * 3.0f), (int)(headY - 4.0f - rise * 6.0f), 8, Fade(RAYWHITE, 1.0f - rise));
+    // Geborgenes Forschungswissen / Kristall
+    if (carryType_ == CarryType::Discovery) {
+        DrawCircle((int)position_.x, (int)position_.y - 15, 3.5f, GOLD);
+        DrawCircleLines((int)position_.x, (int)position_.y - 15, 3.5f, RAYWHITE);
+    }
+
+    if (highlighted) {
+        DrawCircleLines((int)position_.x, (int)position_.y, 13.0f, GOLD);
     }
 }
 
 void Caveman::DrawDebugPath() const {
-    if (IsDead()) return;
-    Vector2 prev = position_;
-    for (size_t i = pathIndex_; i < path_.size(); ++i) {
-        DrawLineEx(prev, path_[i], 1.0f, Fade(YELLOW, 0.7f));
-        prev = path_[i];
+    if (path_.empty() || pathIndex_ >= path_.size()) return;
+    for (size_t i = pathIndex_; i < path_.size() - 1; ++i) {
+        DrawLineEx(path_[i], path_[i + 1], 1.2f, Fade(RoleColor(role_), 0.6f));
     }
-    DrawCircleLinesV(targetPosition_, 3.0f, YELLOW);
 }
-

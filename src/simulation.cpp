@@ -1,5 +1,5 @@
 #include "simulation.h"
-#include "core/config.h"
+#include "config.h"
 
 #include <algorithm>
 #include <cmath>
@@ -24,8 +24,7 @@ const char* RoleDefaultNames(Role role, int id) {
 Simulation::Simulation(int worldWidth, int worldHeight, int screenWidth, int screenHeight)
     : world_(worldWidth, worldHeight, 4242u),
       camera_(screenWidth, screenHeight, world_.CenterPosition(), 2.2f),
-      tribe_(world_.CenterPosition()),
-      civSim_({ world_.CenterPosition().x + 50.0f, world_.CenterPosition().y }, 5) {
+      tribe_(world_.CenterPosition()) {
 
     // 1. Sprite-Sheet laden
     SpriteSheetConfig spriteConfig;
@@ -40,6 +39,7 @@ Simulation::Simulation(int worldWidth, int worldHeight, int screenWidth, int scr
 
     // 2. Ressourcen in der Welt verteilen
     resources_.Populate(world_, tribe_.CampPosition());
+    tribe_.InitWorld(world_);
 
     // 3. Startbevölkerung um das Lagerfeuer spawnen
     Vector2 camp = tribe_.CampPosition();
@@ -83,7 +83,15 @@ void Simulation::SpawnCaveman(Role role, Vector2 worldPos) {
     if (!world_.IsWalkable(worldPos)) return;
     int id = nextCavemanId_++;
     cavemen_.emplace_back(id, RoleDefaultNames(role, id), role, worldPos);
-    eventLog_.Add(TextFormat("%s (%s) dem Stamm beigetreten", RoleDefaultNames(role, id), RoleName(role)), RoleColor(role));
+
+    // Soziologie: Clanzuweisung & Hierarchie
+    tribe_.Hierarchy().AssignToClan(id, (int)role);
+    int clanId = tribe_.Hierarchy().GetClanId(id);
+    const Clan* clan = tribe_.Hierarchy().GetClan(clanId);
+    std::string clanName = clan ? clan->name : "Stamm";
+
+    eventLog_.Add(TextFormat("%s (%s, %s) dem Stamm beigetreten", RoleDefaultNames(role, id), RoleName(role), clanName.c_str()),
+                  clan ? clan->bannerColor : RoleColor(role));
 }
 
 void Simulation::SpawnAnimal(Vector2 worldPos) {
@@ -119,18 +127,46 @@ void Simulation::HandleInput() {
     if (IsKeyPressed(KEY_F2)) timeSpeed_ = 2.0f;
     if (IsKeyPressed(KEY_F3)) timeSpeed_ = 4.0f;
 
+    // Skilltree / Technologiebaum umschalten mit Taste 'K'
+    if (IsKeyPressed(KEY_K)) {
+        skillTreeUI_.Toggle();
+        CancelActiveInput();
+    }
+
     Vector2 mouseScreen = GetMousePosition();
+
+    // Wenn der Skilltree geöffnet ist, Eingaben exklusiv an das Overlay leiten
+    if (skillTreeUI_.IsOpen()) {
+        skillTreeUI_.Update(tribe_, mouseScreen, IsMouseButtonPressed(MOUSE_BUTTON_LEFT));
+        return;
+    }
+
+    // Klick auf den Skilltree-Button in der oberen Leiste
+    Rectangle btnSkillTree = { (float)SCREEN_WIDTH - 240.0f, 10.0f, 130.0f, 28.0f };
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseScreen, btnSkillTree)) {
+        skillTreeUI_.Toggle();
+        CancelActiveInput();
+        return;
+    }
+
+    // Hütte oder Baustelle manuell anfordern mit Taste 'B'
+    if (IsKeyPressed(KEY_B)) {
+        int site = tribe_.EnsureConstructionSite(world_, eventLog_);
+        if (site < 0) {
+            eventLog_.Add("Nicht genug Ressourcen oder kein freier Bauplatz für neues Gebäude!", RED);
+        }
+    }
+
     Vector2 mouseWorld = camera_.ScreenToWorld(mouseScreen);
 
-    // Prüfen, ob Maus im spielbaren Bereich liegt (nicht in oberer Leiste, nicht im Inspektor-Panel, nicht in Letterbox-Rändern)
     bool outOfVirtualScreen = (mouseScreen.x < 0.0f || mouseScreen.x > (float)SCREEN_WIDTH ||
                                mouseScreen.y < 0.0f || mouseScreen.y > (float)SCREEN_HEIGHT);
     bool inTopBar = (mouseScreen.y <= 48);
     bool inBottomHUD = (mouseScreen.y >= SCREEN_HEIGHT - 36 && mouseScreen.x <= 360);
     bool inInspector = false;
     if (selectedCavemanId_ != -1) {
-        float panelW = 280.0f;
-        float panelH = 260.0f;
+        float panelW = 320.0f;
+        float panelH = 430.0f;
         float panelX = (float)SCREEN_WIDTH - panelW - 16.0f;
         float panelY = 60.0f;
         Rectangle inspRect = { panelX, panelY, panelW, panelH };
@@ -140,39 +176,21 @@ void Simulation::HandleInput() {
     }
     bool canInteractWithWorld = !outOfVirtualScreen && !inTopBar && !inBottomHUD && !inInspector;
 
-    // Linksklick: Entweder Inspektion, Spawnen oder Terrain malen (über TAB-Aktionsmenü gesteuert)
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         if (canInteractWithWorld) {
-            // 1. Wenn kein Spawn-Tool aktiv ist, prüfen ob ein Wesen/Mensch zur Inspektion angeklickt wurde
-            bool clickedEntity = false;
+            bool clickedCaveman = false;
             if (currentAction_ != SelectedAction::SPAWN_HUNTER && currentAction_ != SelectedAction::SPAWN_ANIMAL) {
-                // Zuerst Zivilisations-Creatures prüfen
-                for (const auto& c : civSim_.Creatures()) {
+                for (const auto& c : cavemen_) {
                     if (c.IsDead()) continue;
                     if (Vector2Distance(mouseWorld, c.Position()) < 14.0f) {
-                        selectedCreatureId_ = c.Id();
-                        selectedCavemanId_ = -1;
-                        clickedEntity = true;
+                        selectedCavemanId_ = c.Id();
+                        clickedCaveman = true;
                         break;
-                    }
-                }
-
-                // Danach Cavemen prüfen
-                if (!clickedEntity) {
-                    for (const auto& c : cavemen_) {
-                        if (c.IsDead()) continue;
-                        if (Vector2Distance(mouseWorld, c.Position()) < 14.0f) {
-                            selectedCavemanId_ = c.Id();
-                            selectedCreatureId_ = -1;
-                            clickedEntity = true;
-                            break;
-                        }
                     }
                 }
             }
 
-            // 2. Wenn keine Entity angeklickt wurde: Aktion ausführen
-            if (!clickedEntity) {
+            if (!clickedCaveman) {
                 if (currentAction_ == SelectedAction::SPAWN_HUNTER) {
                     SpawnCaveman(Role::Hunter, mouseWorld);
                 } else if (currentAction_ == SelectedAction::SPAWN_ANIMAL) {
@@ -186,7 +204,6 @@ void Simulation::HandleInput() {
             }
         }
     } else if (isPainting_ && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-        // Kontinuierliches Malen NUR wenn zuvor auf der Welt gestartet wurde!
         if (canInteractWithWorld) {
             int tx = World::ToTile(mouseWorld.x);
             int ty = World::ToTile(mouseWorld.y);
@@ -209,24 +226,27 @@ void Simulation::Update(float dt) {
     totalSimTime_ += effectiveDt;
     eventLog_.SetTime(totalSimTime_);
 
+    float timeOfDay = std::fmod(totalSimTime_, cfg::kDayCycleDuration) / cfg::kDayCycleDuration;
+
     // Sub-stepping für stabile Logik
     float remaining = effectiveDt;
     while (remaining > 0.0f) {
         float step = std::min(remaining, cfg::kMaxSimStep);
 
-        // 1. Ressourcen updaten (Nachwachsen, Tiere)
+        // 1. Ressourcen updaten
         resources_.Update(world_, tribe_.CampPosition(), step);
 
-        // 2. Steinzeitmenschen updaten
+        // 2. Stamm & Gebäude & Soziales updaten
         int population = GetAliveCount();
-        WorldContext ctx{ world_, tribe_, resources_, eventLog_, population };
+        tribe_.Update(world_, cavemen_, population, step, eventLog_);
+        tribe_.Hierarchy().UpdateLeadership(tribe_.Relationships(), cavemen_, eventLog_);
+
+        // 3. Steinzeitmenschen mit Utility AI & Soziologie updaten
+        WorldContext ctx{ world_, tribe_, resources_, eventLog_, population, timeOfDay, &cavemen_ };
 
         for (auto& c : cavemen_) {
             c.Update(ctx, step);
         }
-
-        // 3. Modulare Zivilisations-Simulation updaten (Creatures, Siedlung, Epochen)
-        civSim_.Update(step, world_, eventLog_);
 
         remaining -= step;
     }
@@ -241,13 +261,20 @@ void Simulation::DrawWorld() const {
     // 2. Ressourcen
     resources_.Draw(camera_.Get());
 
-    // 3. Stamm (Lagerfeuer, Vorratslager, Hütten)
+    // 3. Entdeckungsorte (Points of Interest)
+    tribe_.POIs().Draw(camera_.Get(), totalSimTime_);
+
+    // 4. Stamm & Gebäude
     tribe_.Draw(totalSimTime_);
 
-    // 4. Modulare Zivilisations-Siedlung & Kreaturen zeichnen
-    civSim_.DrawWorld(&spriteSheet_, selectedCreatureId_);
+    // 5. Nacht-Lichtstimmung
+    float timeOfDay = std::fmod(totalSimTime_, cfg::kDayCycleDuration) / cfg::kDayCycleDuration;
+    bool isNight = (timeOfDay > 0.72f || timeOfDay < 0.22f);
+    if (isNight) {
+        DrawRectangle(0, 0, world_.Width() * TILE_SIZE, world_.Height() * TILE_SIZE, Fade(Color{ 10, 15, 45, 255 }, 0.22f));
+    }
 
-    // 5. Steinzeitmenschen Y-sortiert zeichnen (Tiefensortierung)
+    // 6. Steinzeitmenschen Y-sortiert zeichnen
     std::vector<const Caveman*> sortedCavemen;
     sortedCavemen.reserve(cavemen_.size());
     for (const auto& c : cavemen_) {
@@ -265,7 +292,7 @@ void Simulation::DrawWorld() const {
         c->Draw(spriteSheet_, highlighted);
     }
 
-    // 5. Aktions-Vorschau an Mausposition
+    // 6. Aktions-Vorschau an Mausposition
     Vector2 mouseScreen = GetMousePosition();
     if (mouseScreen.x >= 0 && mouseScreen.x <= SCREEN_WIDTH && mouseScreen.y > 48 && mouseScreen.y < SCREEN_HEIGHT - 36) {
         Vector2 mouseWorld = camera_.ScreenToWorld(mouseScreen);
@@ -290,78 +317,60 @@ void Simulation::DrawUI() const {
     // -------------------------------------------------------------------------
     // 1. Obere Statusleiste
     // -------------------------------------------------------------------------
-    DrawRectangle(0, 0, screenW, 48, Fade(BLACK, 0.85f));
+    DrawRectangle(0, 0, screenW, 48, Fade(BLACK, 0.88f));
     DrawRectangleLines(0, 0, screenW, 48, Fade(GRAY, 0.5f));
 
     DrawText("Stone Age 2D Sandbox", 16, 14, 20, RAYWHITE);
 
+    // Zeitalter & Epochen-Pacing
+    Era era = tribe_.Age().CurrentEra();
+    DrawText(TextFormat("[%s]  %.0fs/%.0fs (M:%d/%d)", EraName(era),
+                        tribe_.Age().EraElapsedTime(), tribe_.Age().RequiredEraDuration(era),
+                        tribe_.Skills().GetMilestonesCompleted(era), tribe_.Skills().GetMilestonesTotal(era)),
+             235, 15, 15, EraColor(era));
+
+    // Tag / Nacht Indikator
+    float timeOfDay = std::fmod(totalSimTime_, cfg::kDayCycleDuration) / cfg::kDayCycleDuration;
+    bool isNight = (timeOfDay > 0.72f || timeOfDay < 0.22f);
+    DrawText(isNight ? "NACHT" : "TAG", 465, 16, 15, isNight ? SKYBLUE : GOLD);
+
     // Pause & Speed
     if (isPaused_) {
-        DrawText("[PAUSIERT]", 260, 16, 18, RED);
+        DrawText("[PAUSE]", 525, 16, 15, RED);
     } else {
-        DrawText(TextFormat("[SPEED: %.0fx]", timeSpeed_), 260, 16, 18, GREEN);
+        DrawText(TextFormat("[%.0fx]", timeSpeed_), 525, 16, 15, GREEN);
     }
 
-    // Lager-Vorräte
+    // Lager-Vorräte (Rohstoffe & Veredelt)
     const auto& stock = tribe_.Stock();
     int pop = GetAliveCount();
     int sleepCap = tribe_.SleepingCapacity();
 
-    DrawText(TextFormat("Pop: %d", pop), 400, 16, 18, RAYWHITE);
-    DrawText(TextFormat("Nahrung: %d", stock.food), 500, 16, 18, (stock.food > 5) ? LIME : RED);
-    DrawText(TextFormat("Holz: %d", stock.wood), 640, 16, 18, { 200, 140, 70, 255 });
-    DrawText(TextFormat("Stein: %d", stock.stone), 750, 16, 18, { 190, 190, 190, 255 });
-    DrawText(TextFormat("Hütten: %d (Betten: %d)", stock.huts, sleepCap), 870, 16, 18, GOLD);
+    DrawText(TextFormat("Pop: %d", pop), 570, 16, 16, RAYWHITE);
+    DrawText(TextFormat("Nahrung: %d", stock.food), 650, 16, 16, (stock.food > 5) ? LIME : RED);
+    DrawText(TextFormat("Holz: %d", stock.wood), 770, 16, 16, { 200, 140, 70, 255 });
+    DrawText(TextFormat("Stein: %d", stock.stone), 860, 16, 16, { 190, 190, 190, 255 });
+
+    if (stock.planks > 0 || stock.bricks > 0 || era >= Era::BronzeAge) {
+        DrawText(TextFormat("Balken: %d", stock.planks), 950, 16, 16, { 230, 175, 95, 255 });
+        DrawText(TextFormat("Ziegel: %d", stock.bricks), 1055, 16, 16, { 200, 200, 210, 255 });
+    }
+
+    DrawText(TextFormat("Betten: %d/%d", pop, sleepCap), 1160, 16, 16, (sleepCap >= pop) ? GOLD : ORANGE);
+
+    // Skilltree-Button
+    Vector2 mouseScreen = GetMousePosition();
+    Rectangle btnSkillTree = { (float)screenW - 250.0f, 10.0f, 140.0f, 28.0f };
+    bool hovTree = CheckCollisionPointRec(mouseScreen, btnSkillTree);
+    DrawRectangleRec(btnSkillTree, hovTree ? Color{ 55, 80, 130, 255 } : Color{ 32, 45, 75, 255 });
+    DrawRectangleLinesEx(btnSkillTree, 1.2f, GOLD);
+    DrawText("[K] Skilltree", (int)btnSkillTree.x + 18, (int)btnSkillTree.y + 6, 15, GOLD);
 
     DrawFPS(screenW - 90, 16);
 
     // -------------------------------------------------------------------------
-    // 2. Inspektor-Panel (rechts)
+    // 2. Inspektor-Panel für selektierten Steinzeitmenschen (rechts)
     // -------------------------------------------------------------------------
-    // 2a. Inspektor für selektierte Zivilisations-Creature
-    const Creature* selectedCreature = civSim_.GetCreatureById(selectedCreatureId_);
-    if (selectedCreature && !selectedCreature->IsDead()) {
-        int panelW = 280;
-        int panelH = 260;
-        int panelX = screenW - panelW - 16;
-        int panelY = 60;
-
-        DrawRectangle(panelX, panelY, panelW, panelH, Fade(BLACK, 0.85f));
-        DrawRectangleLines(panelX, panelY, panelW, panelH, SKYBLUE);
-
-        DrawText(selectedCreature->Name().c_str(), panelX + 14, panelY + 12, 18, RAYWHITE);
-        DrawText(TextFormat("Epoche: %s", civSim_.Tech().CurrentAgeName()), panelX + 14, panelY + 34, 15, GOLD);
-
-        DrawText(TextFormat("Status: %s", Creature::StateToString(selectedCreature->State())), panelX + 14, panelY + 56, 12, YELLOW);
-        DrawText(TextFormat("Aktivitaet: %s", selectedCreature->ActivityDescription().c_str()), panelX + 14, panelY + 74, 12, LIGHTGRAY);
-
-        auto drawStatBar = [&](const char* label, float val, float maxVal, int y, Color barColor) {
-            DrawText(TextFormat("%s: %.0f/%.0f", label, val, maxVal), panelX + 14, y, 13, RAYWHITE);
-            int barX = panelX + 120;
-            int barW = 140;
-            int barH = 12;
-            DrawRectangle(barX, y + 1, barW, barH, Fade(GRAY, 0.4f));
-            float pct = std::clamp(val / maxVal, 0.0f, 1.0f);
-            DrawRectangle(barX, y + 1, (int)(barW * pct), barH, barColor);
-            DrawRectangleLines(barX, y + 1, barW, barH, Fade(WHITE, 0.5f));
-        };
-
-        drawStatBar("Gesundheit", selectedCreature->Health(), 100.0f, panelY + 100, (selectedCreature->Health() > 50) ? GREEN : RED);
-        drawStatBar("Hunger", selectedCreature->Hunger(), 100.0f, panelY + 124, (selectedCreature->Hunger() > 70) ? RED : ORANGE);
-        drawStatBar("Energie", selectedCreature->Energy(), 100.0f, panelY + 148, SKYBLUE);
-
-        if (selectedCreature->CarriedAmount() > 0) {
-            DrawText(TextFormat("Traegt: %d x %s", selectedCreature->CarriedAmount(),
-                     CivilizationTech::ResourceToString(selectedCreature->CarriedResource())),
-                     panelX + 14, panelY + 180, 13, GREEN);
-        } else {
-            DrawText("Traegt: nichts", panelX + 14, panelY + 180, 13, DARKGRAY);
-        }
-
-        DrawText("Fokus: Zivilisations-Creature", panelX + 14, panelY + 230, 11, GRAY);
-    }
-
-    // 2b. Inspektor-Panel für selektierten Steinzeitmenschen (rechts)
     const Caveman* selected = nullptr;
     for (const auto& c : cavemen_) {
         if (c.Id() == selectedCavemanId_ && !c.IsDead()) {
@@ -371,52 +380,90 @@ void Simulation::DrawUI() const {
     }
 
     if (selected) {
-        int panelW = 280;
-        int panelH = 260;
+        int panelW = 320;
+        int panelH = 430;
         int panelX = screenW - panelW - 16;
         int panelY = 60;
 
-        DrawRectangle(panelX, panelY, panelW, panelH, Fade(BLACK, 0.85f));
+        DrawRectangle(panelX, panelY, panelW, panelH, Fade(BLACK, 0.90f));
         DrawRectangleLines(panelX, panelY, panelW, panelH, RoleColor(selected->GetRole()));
 
+        // Name & Rolle
         DrawText(selected->Name().c_str(), panelX + 14, panelY + 12, 18, RAYWHITE);
         DrawText(RoleName(selected->GetRole()), panelX + 14, panelY + 34, 15, RoleColor(selected->GetRole()));
 
-        DrawText(TextFormat("Status: %s", StateName(selected->State())), panelX + 14, panelY + 56, 14, YELLOW);
-        DrawText(TextFormat("Aktion: %s", selected->ActivityText().c_str()), panelX + 14, panelY + 74, 13, LIGHTGRAY);
+        // Clan & Rang
+        int clanId = tribe_.Hierarchy().GetClanId(selected->Id());
+        const Clan* clan = tribe_.Hierarchy().GetClan(clanId);
+        SocialRank rank = tribe_.Hierarchy().GetRank(selected->Id());
+        DrawText(TextFormat("%s | %s", clan ? clan->name.c_str() : "Stammlos", SocialRankName(rank)),
+                 panelX + 14, panelY + 52, 13, clan ? clan->bannerColor : GOLD);
+
+        // Persönlichkeits-Kurzprofil
+        const Personality& p = selected->GetPersonality();
+        DrawText(TextFormat("Wesen: %s (Dom: %+.1f, Alt: %+.1f, Soz: %+.1f)",
+                            p.GetPrimaryTraitDescription().c_str(), p.dominance, p.altruism, p.sociability),
+                 panelX + 14, panelY + 70, 11, LIGHTGRAY);
+
+        // Beziehungen
+        int partnerId = tribe_.Relationships().GetPartner(selected->Id());
+        auto friends = tribe_.Relationships().GetFriends(selected->Id());
+        auto enemies = tribe_.Relationships().GetEnemies(selected->Id());
+        DrawText(TextFormat("Partner: %s | Freunde: %d | Rivalen: %d",
+                            (partnerId >= 0 ? TextFormat("#%d", partnerId) : "Keiner"),
+                            (int)friends.size(), (int)enemies.size()),
+                 panelX + 14, panelY + 86, 12, (partnerId >= 0 ? PINK : RAYWHITE));
+
+        // Status & Tätigkeit
+        DrawText(TextFormat("Status: %s", StateName(selected->State())), panelX + 14, panelY + 106, 13, YELLOW);
+        DrawText(TextFormat("Tätigkeit: %s", selected->ActivityText().c_str()), panelX + 14, panelY + 122, 12, LIGHTGRAY);
 
         auto drawStatBar = [&](const char* label, float val, float maxVal, int y, Color barColor) {
-            DrawText(TextFormat("%s: %.0f/%.0f", label, val, maxVal), panelX + 14, y, 13, RAYWHITE);
+            DrawText(TextFormat("%s: %.0f/%.0f", label, val, maxVal), panelX + 14, y, 12, RAYWHITE);
             int barX = panelX + 120;
-            int barW = 140;
-            int barH = 12;
+            int barW = 175;
+            int barH = 11;
             DrawRectangle(barX, y + 1, barW, barH, Fade(GRAY, 0.4f));
             float pct = std::clamp(val / maxVal, 0.0f, 1.0f);
             DrawRectangle(barX, y + 1, (int)(barW * pct), barH, barColor);
             DrawRectangleLines(barX, y + 1, barW, barH, Fade(WHITE, 0.5f));
         };
 
-        drawStatBar("HP", selected->Hp(), 100.0f, panelY + 100, (selected->Hp() > 50) ? GREEN : RED);
-        drawStatBar("AP", selected->Ap(), 100.0f, panelY + 124, SKYBLUE);
-        drawStatBar("Hunger", selected->Hunger(), 100.0f, panelY + 148, (selected->Hunger() > 70) ? RED : ORANGE);
-        drawStatBar("Müdigkeit", selected->Tiredness(), 100.0f, panelY + 172, (selected->Tiredness() > 80) ? PURPLE : BLUE);
+        drawStatBar("HP", selected->Hp(), 100.0f, panelY + 144, (selected->Hp() > 50) ? GREEN : RED);
+        drawStatBar("AP", selected->Ap(), 100.0f, panelY + 162, SKYBLUE);
+        drawStatBar("Hunger", selected->Hunger(), 100.0f, panelY + 180, (selected->Hunger() > 70) ? RED : ORANGE);
+        drawStatBar("Wärme", selected->Warmth(), 100.0f, panelY + 198, (selected->Warmth() < 30) ? RED : (selected->Warmth() < 60) ? YELLOW : ORANGE);
+        drawStatBar("Müdigkeit", selected->Tiredness(), 100.0f, panelY + 216, (selected->Tiredness() > 80) ? PURPLE : BLUE);
+        drawStatBar("Motivation", selected->Morale(), 100.0f, panelY + 234, (selected->Morale() > 60) ? LIME : GOLD);
+        drawStatBar("Gemeinschaft", 100.0f - selected->SocialNeed(), 100.0f, panelY + 252, (selected->SocialNeed() > 70) ? ORANGE : GREEN);
 
         if (selected->Carrying() != CarryType::None) {
             const char* carryName = (selected->Carrying() == CarryType::Food) ? "Nahrung" :
-                                    (selected->Carrying() == CarryType::Wood) ? "Holz" : "Stein";
+                                    (selected->Carrying() == CarryType::Wood) ? "Holz" :
+                                    (selected->Carrying() == CarryType::Stone) ? "Stein" :
+                                    (selected->Carrying() == CarryType::Planks) ? "Balken" : "Ziegel";
             DrawText(TextFormat("Trägt: %d x %s", selected->CarryAmount(), carryName),
-                     panelX + 14, panelY + 200, 14, GREEN);
+                     panelX + 14, panelY + 276, 13, GREEN);
         } else {
-            DrawText("Trägt: nichts", panelX + 14, panelY + 200, 13, DARKGRAY);
+            DrawText("Trägt: nichts", panelX + 14, panelY + 276, 12, DARKGRAY);
         }
 
-        DrawText("Klick auf anderen Menschen zum Wechseln", panelX + 14, panelY + 230, 11, GRAY);
-    }
+        // --- Utility AI Log & Entscheidungsgrund ---
+        DrawLine(panelX + 10, panelY + 298, panelX + panelW - 10, panelY + 298, Fade(GRAY, 0.5f));
+        DrawText("KI-Entscheidung (Utility AI):", panelX + 14, panelY + 306, 12, GOLD);
+        DrawText(selected->DecisionReason().c_str(), panelX + 14, panelY + 326, 11, RAYWHITE);
+        DrawText(TextFormat("Nutzen-Score: %.2f", selected->DecisionScore()), panelX + 14, panelY + 348, 11, SKYBLUE);
 
-    // -------------------------------------------------------------------------
-    // 3. Zivilisations-Status & Epochen-Leiste
-    // -------------------------------------------------------------------------
-    civSim_.DrawUI(screenW, screenH);
+        // Letzte prägende Erinnerung
+        const auto& memories = selected->Memory().Entries();
+        if (!memories.empty()) {
+            const auto& lastMem = memories.back();
+            DrawText(TextFormat("Erinnerung: %s (zu #%d)", MemoryTypeName(lastMem.type), lastMem.otherId),
+                     panelX + 14, panelY + 372, 11, (lastMem.baseImpact >= 0 ? LIME : ORANGE));
+        }
+
+        DrawText("Klick auf anderen Menschen zum Wechseln", panelX + 14, panelY + 404, 11, GRAY);
+    }
 
     // -------------------------------------------------------------------------
     // 3. Ereignis-Log (unten links)
@@ -427,5 +474,9 @@ void Simulation::DrawUI() const {
         DrawText(entry.text.c_str(), 16, logY, 14, Fade(entry.color, 0.9f));
         logY += 18;
     }
-}
 
+    // -------------------------------------------------------------------------
+    // 4. Interaktives Skilltree-Overlay (über allen anderen Elementen)
+    // -------------------------------------------------------------------------
+    skillTreeUI_.Draw(tribe_, mouseScreen);
+}

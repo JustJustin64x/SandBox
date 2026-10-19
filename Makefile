@@ -1,5 +1,17 @@
 CXX = g++
-CXXFLAGS = -Wall -Wextra -std=c++17 -Iinclude -O2
+CXXFLAGS = -Wall -Wextra -Wno-missing-field-initializers -std=c++17 \
+           -Iinclude \
+           -Iinclude/core \
+           -Iinclude/gfx \
+           -Iinclude/world \
+           -Iinclude/entities \
+           -Iinclude/buildings \
+           -Iinclude/ai \
+           -Iinclude/social \
+           -Iinclude/progression \
+           -Iinclude/ui \
+           -Iinclude/civ \
+           -O2
 
 # Alle Quelldateien rekursiv erfassen
 SRC = $(wildcard src/*.cpp) $(wildcard src/*/*.cpp)

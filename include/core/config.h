@@ -1,4 +1,5 @@
-#pragma once
+#ifndef CONFIG_H
+#define CONFIG_H
 
 // ============================================================================
 //  Zentrale Spielbalance. Alle Werte sind bewusst hier gebündelt, damit man
@@ -91,10 +92,40 @@ constexpr int kBushCount   = 40;
 constexpr int kRockCount   = 28;
 constexpr int kAnimalCount = 14;
 
+// --- Wärme & Kälte ---------------------------------------------------------
+constexpr float kWarmthLossDay            = 0.3f;   // pro Sekunde tagsüber
+constexpr float kWarmthLossNight          = 2.2f;   // pro Sekunde nachts
+constexpr float kWarmthRecoverNearFire    = 8.0f;   // am Lagerfeuer
+constexpr float kWarmthRecoverInShelter   = 12.0f;  // in einer Hütte
+constexpr float kFreezingThreshold        = 25.0f;  // ab hier: dringend Schutz suchen
+constexpr float kColdDamagePerSecond      = 2.0f;   // Schaden wenn Wärme = 0
+
+// --- Veredelung an der Werkbank ---------------------------------------------
+constexpr float kCraftDuration            = 3.5f;   // Sekunden pro Balken / Ziegel
+constexpr float kApCostCraft              = 3.5f;
+
+// --- Tag-Nacht-Zyklus -------------------------------------------------------
+constexpr float kDayCycleDuration         = 120.0f; // Sekunden für vollen Tag-Nacht-Zyklus
+
+// --- Historisch skalierte Zeitalter-Dauer (Time-Gating) ----------------------
+// Reale Epochen skaliert: Steinzeit am längsten (3 Min), Bronzezeit (2.5 Min), Eisenzeit (2 Min).
+constexpr float kStoneAgeDuration         = 360.0f; // Sekunden Mindestdauer für Steinzeit
+constexpr float kBronzeAgeDuration        = 300.0f; // Sekunden Mindestdauer für Bronzezeit
+constexpr float kIronAgeDuration          = 240.0f; // Sekunden Mindestdauer für Eisenzeit
+
+// --- Ausrüstung & Expedition ------------------------------------------------
+constexpr float kExpeditionDuration       = 12.0f;   // Sekunden Erkundungsdauer vor Ort am POI
+constexpr float kExpeditionTorchLight     = 55.0f;  // Lichtradius einer Fackel bei Nacht
+constexpr float kExpeditionMoraleBoost    = 30.0f;  // Morale-Bonus nach erfolgreicher Expedition
+constexpr int   kTorchWoodCost            = 1;      // Holzbedarf für eine Fackel
+constexpr int   kPickaxeWoodCost          = 1;      // Holzbedarf für eine Steinspitzhacke
+constexpr int   kPickaxeStoneCost         = 1;      // Steinbedarf für eine Steinspitzhacke
+
 // --- Animation --------------------------------------------------------------
 constexpr float kWalkAnimFps      = 8.0f;
 constexpr float kWorkAnimInterval = 0.35f;
 
 } // namespace cfg
 
+#endif // CONFIG_H
 

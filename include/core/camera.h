@@ -1,6 +1,11 @@
-#pragma once
+#ifndef CAMERA_H
+#define CAMERA_H
 
-#include "core/common.h"
+#if __has_include("core/common.h")
+    #include "core/common.h"
+#else
+    #include "common.h"
+#endif
 
 // Steuert die 2D-Kamera: WASD/Pfeiltasten, Ziehen mit mittlerer Maustaste,
 // Mausrad-Zoom zentriert auf den Mauszeiger.
@@ -14,6 +19,8 @@ public:
 
 private:
     Camera2D camera_;
-    int screenWidth_ = 1920;
-    int screenHeight_ = 1080;
+    [[maybe_unused]] int screenWidth_ = 1920;
+    [[maybe_unused]] int screenHeight_ = 1080;
 };
+
+#endif // CAMERA_H
