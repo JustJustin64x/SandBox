@@ -129,7 +129,7 @@ public:
     Caveman(int id, std::string name, Role role, Vector2 position);
 
     void Update(WorldContext& ctx, float dt);
-    void Draw(const SpriteSheet& sheet, bool highlighted) const;
+    void Draw(const SpriteSheet& sheet, bool highlighted, float visualYOffset = 0.0f) const;
     void DrawDebugPath() const;
     void TakeDamage(float amount, const char* cause, WorldContext& ctx);
 
@@ -178,6 +178,7 @@ public:
     int TargetSocialPartner() const           { return targetSocialPartner_; }
     bool IsCarryingTorch() const              { return carryingTorch_; }
     bool IsOnExpedition() const               { return state_ == CavemanState::Expedition; }
+    bool IsSwimming() const                   { return isSwimming_; }
 
     // --- Visuelles Feedback ("Show, Don't Tell") & Fraktionszugehörigkeit -----
     void TriggerEmote(SocialEmote emote, float duration = 3.2f);
@@ -236,8 +237,8 @@ private:
     void AutoUpgradeGearFromTribe(WorldContext& ctx, bool atBench);
     void DegradeToolDurability(float amount, WorldContext& ctx);
     Vector2 PersonalOffset(float radius) const;
-    void DrawFloatingEmote() const;
-    void DrawClothingAndGear() const;
+    void DrawFloatingEmote(Vector2 drawPos) const;
+    void DrawClothingAndGear(Vector2 drawPos) const;
 
     // --- Identität & Demografie -----------------------------------------------
     int id_;
@@ -311,10 +312,11 @@ private:
     CarryType carryType_ = CarryType::None;
     int carryAmount_ = 0;
 
-    // --- Animation --------------------------------------------------------------
+    // --- Animation & Bewegung ---------------------------------------------------
     float animTime_ = 0.0f;
     bool facingLeft_ = false;
     bool isMoving_ = false;
+    bool isSwimming_ = false;
     float damageFlash_ = 0.0f;
 };
 

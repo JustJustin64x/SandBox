@@ -50,7 +50,7 @@ class ResourceManager {
 public:
     void Populate(const World& world, Vector2 campPos);
     void Update(const World& world, Vector2 campPos, float dt);
-    void Draw(const Camera2D& camera) const;
+    void Draw(const Camera2D& camera, const World* world = nullptr) const;
 
     // Bestes (nahes, wenig umkämpftes) verfügbares Objekt eines Typs; -1 wenn keins.
     int FindBest(ResourceType type, Vector2 from) const;
@@ -67,6 +67,7 @@ public:
     int SpawnAnimal(const World& world, Vector2 position);
 
     int CountAvailable(ResourceType type) const;
+    void Clear() { nodes_.clear(); }
     const std::vector<ResourceNode>& Nodes() const { return nodes_; }
     std::vector<ResourceNode>& NodesMutable() { return nodes_; }
 

@@ -139,6 +139,7 @@ int main() {
                 Rectangle btnFire    = { tabMenuBox.x + 275, tabMenuBox.y + 122, 215, 38 };
                 Rectangle btnGravity = { tabMenuBox.x + 275, tabMenuBox.y + 169, 215, 38 };
                 Rectangle btnWeather = { tabMenuBox.x + 275, tabMenuBox.y + 216, 215, 38 };
+                Rectangle btnRegen   = { tabMenuBox.x + 275, tabMenuBox.y + 263, 215, 38 };
 
                 Rectangle btnClose   = { tabMenuBox.x + 160, tabMenuBox.y + 325, 200, 38 };
 
@@ -167,6 +168,12 @@ int main() {
                     else if (CheckCollisionPointRec(mousePos, btnWeather)) {
                         sim.CycleWeather();
                         ignoreMouseUntilRelease = true;
+                    } else if (CheckCollisionPointRec(mousePos, btnRegen)) {
+                        sim.RegenerateWorld(0);
+                        showTabMenu = false;
+                        sim.SetPaused(isPaused);
+                        ignoreMouseUntilRelease = true;
+                        sim.CancelActiveInput();
                     } else if (CheckCollisionPointRec(mousePos, btnClose)) {
                         showTabMenu = false;
                         sim.SetPaused(isPaused);
@@ -292,6 +299,7 @@ int main() {
                     drawBtn({ tabMenuBox.x + 275, tabMenuBox.y + 216, 215, 38 },
                             TextFormat("Wetter: %s", WeatherTypeName(sim.Env().GetWeather())),
                             Color{ 60, 95, 130, 255 }, false);
+                    drawBtn({ tabMenuBox.x + 275, tabMenuBox.y + 263, 215, 38 }, "Neue Welt [R]", Color{ 160, 110, 40, 255 }, false);
 
                     // Schließen-Button
                     drawBtn({ tabMenuBox.x + 160, tabMenuBox.y + 325, 200, 38 }, "Schließen", Color{ 70, 70, 80, 255 }, false);

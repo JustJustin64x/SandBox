@@ -18,4 +18,5 @@ constexpr int TARGET_FPS    = 60;
 constexpr int DEFAULT_WORLD_WIDTH  = 160;   // in Kacheln
 constexpr int DEFAULT_WORLD_HEIGHT = 100;   // in Kacheln
 constexpr int TILE_SIZE            = 16;    // Pixel pro Kachel
+constexpr float ELEVATION_PIXEL_HEIGHT = 6.0f; // Vertikaler Versatz pro Höhenstufe im 2.5D Stacked Renderer
 

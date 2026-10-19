@@ -1,5 +1,6 @@
 #include "building.h"
 #include "tribe.h"
+#include "world/world.h"
 #include "age_manager.h"
 #include "event_log.h"
 #include "font_manager.h"
@@ -489,9 +490,13 @@ float BuildingManager::GetWarmthAt(Vector2 pos) const {
 // ============================================================================
 //  Zeichnen der Gebäude
 // ============================================================================
-void BuildingManager::Draw(float simTime) const {
+void BuildingManager::Draw(float simTime, const World* world) const {
     for (const auto& b : buildings_) {
-        DrawBuilding(b, simTime);
+        Building bCopy = b;
+        if (world) {
+            bCopy.position.y += world->GetVisualYOffset(b.position);
+        }
+        DrawBuilding(bCopy, simTime);
     }
 }
 

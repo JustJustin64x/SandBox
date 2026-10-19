@@ -26,6 +26,7 @@ constexpr float kHungerCritical            = 90.0f;  // weckt Schlafende auf
 constexpr float kSatedHunger               = 10.0f;  // hört auf zu essen
 constexpr float kTirednessThreshold        = 80.0f;  // ab hier: schlafen gehen
 constexpr float kApMinForWork              = 10.0f;  // darunter: erst ausruhen
+constexpr float kApRegenPerSecond            = 2.5f;   // passive AP-Regeneration im Wachzustand
 
 // --- Schlaf -----------------------------------------------------------------
 constexpr float kSleepTirednessRecovery = 6.0f;   // pro Sekunde (unter freiem Himmel)

@@ -199,7 +199,14 @@ void ResourceManager::Update(const World& world, Vector2 campPos, float dt) {
         const float regrowTime = (n.type == ResourceType::Tree) ? cfg::kTreeRegrowTime
                                : (n.type == ResourceType::Bush) ? cfg::kBushRegrowTime
                                                                  : cfg::kRockRegrowTime;
-        n.regrowTimer += dt;
+        float growRate = 1.0f;
+        // Fruchtbarkeit an Flussauen: +40% Nachwachsen im Umkreis von 5 Kacheln um Süßwasser
+        int tx = World::ToTile(n.position.x);
+        int ty = World::ToTile(n.position.y);
+        if (world.IsNearFreshwater(tx, ty, 5)) {
+            growRate = 1.40f;
+        }
+        n.regrowTimer += dt * growRate;
         if (n.regrowTimer >= regrowTime) {
             n.regrowTimer -= regrowTime;
             n.amount++;
@@ -281,56 +288,67 @@ void ResourceManager::RespawnAnimal(ResourceNode& n, const World& world, Vector2
 }
 
 // ============================================================================
-//  Zeichnen (einfache Primitive, damit keine weiteren Assets nötig sind)
+//  Zeichnen (Phase 4: 2.5D Elevation-Offset, plastische 3D-Bäume & Drop-Shadows)
 // ============================================================================
-void ResourceManager::Draw(const Camera2D& camera) const {
+void ResourceManager::Draw(const Camera2D& camera, const World* world) const {
     const Vector2 tl = GetScreenToWorld2D({ 0, 0 }, camera);
     const Vector2 br = GetScreenToWorld2D({ (float)SCREEN_WIDTH, (float)SCREEN_HEIGHT }, camera);
-    const Rectangle view = { tl.x - 32, tl.y - 32, br.x - tl.x + 64, br.y - tl.y + 64 };
+    const Rectangle view = { tl.x - 32, tl.y - 48, br.x - tl.x + 64, br.y - tl.y + 80 };
 
     for (const ResourceNode& n : nodes_) {
         if (!CheckCollisionPointRec(n.position, view)) continue;
-        const float x = n.position.x, y = n.position.y;
+        const float x = n.position.x;
+        const float visualY = n.position.y + (world ? world->GetVisualYOffset(n.position) : 0.0f);
 
         switch (n.type) {
             case ResourceType::Tree:
-                DrawEllipse((int)x, (int)y, 6, 2, Fade(BLACK, 0.25f));
+                // Runder 3D-Boden-Schlagschatten
+                DrawEllipse((int)x, (int)visualY, 7, 3, Fade(BLACK, 0.30f));
                 if (n.charred) {
                     // Verkohlter Baumstumpf mit Glutresten
-                    DrawRectangleRec({ x - 2.5f, y - 5.0f, 5.0f, 5.0f }, { 38, 32, 30, 255 });
-                    DrawLineEx({ x - 2.0f, y - 5.0f }, { x - 3.5f, y - 8.5f }, 1.5f, { 30, 25, 22, 255 });
-                    DrawLineEx({ x + 1.5f, y - 5.0f }, { x + 3.0f, y - 7.5f }, 1.3f, { 30, 25, 22, 255 });
-                    DrawCircleV({ x, y - 2.5f }, 1.2f, { 235, 95, 30, 200 }); // Glutpunkt
+                    DrawRectangleRec({ x - 2.5f, visualY - 5.0f, 5.0f, 5.0f }, { 38, 32, 30, 255 });
+                    DrawLineEx({ x - 2.0f, visualY - 5.0f }, { x - 3.5f, visualY - 8.5f }, 1.5f, { 30, 25, 22, 255 });
+                    DrawLineEx({ x + 1.5f, visualY - 5.0f }, { x + 3.0f, visualY - 7.5f }, 1.3f, { 30, 25, 22, 255 });
+                    DrawCircleV({ x, visualY - 2.5f }, 1.2f, { 235, 95, 30, 200 }); // Glutpunkt
                 } else if (n.amount > 0) {
-                    DrawRectangleRec({ x - 1.5f, y - 7.0f, 3.0f, 7.0f }, { 110, 70, 35, 255 });
-                    DrawCircleV({ x, y - 12.0f }, 6.5f, { 30, 90, 30, 255 });
-                    DrawCircleV({ x - 3.5f, y - 9.0f }, 4.5f, { 40, 115, 40, 255 });
-                    DrawCircleV({ x + 3.5f, y - 9.5f }, 4.5f, { 50, 125, 45, 255 });
+                    // Plastischer 3D-Baum mit mehrstufig abgestufter Kugelkrone
+                    DrawRectangleRec({ x - 1.5f, visualY - 8.0f, 3.0f, 8.0f }, { 102, 64, 32, 255 });
+                    // Dunkelgrüne Basis-Krone
+                    DrawCircleV({ x, visualY - 14.0f }, 7.5f, { 24, 76, 26, 255 });
+                    // Mittlere Schattierungsebenen
+                    DrawCircleV({ x - 3.5f, visualY - 11.0f }, 5.2f, { 35, 102, 36, 255 });
+                    DrawCircleV({ x + 3.5f, visualY - 11.5f }, 5.2f, { 42, 114, 40, 255 });
+                    // Sonnen-Highlights auf der Oberseite (plastische Plastizität)
+                    DrawCircleV({ x - 1.2f, visualY - 16.0f }, 3.8f, { 64, 148, 54, 255 });
+                    DrawCircleV({ x + 2.2f, visualY - 14.2f }, 2.8f, { 80, 168, 64, 255 });
                 } else {
-                    DrawRectangleRec({ x - 2.0f, y - 3.0f, 4.0f, 3.0f }, { 120, 80, 40, 255 });   // Baumstumpf
+                    DrawRectangleRec({ x - 2.0f, visualY - 3.0f, 4.0f, 3.0f }, { 120, 80, 40, 255 });   // Baumstumpf
                 }
                 break;
 
             case ResourceType::Bush: {
+                DrawEllipse((int)x, (int)visualY, 5, 2, Fade(BLACK, 0.22f));
                 if (n.charred) {
-                    DrawCircleV({ x, y - 2.0f }, 3.5f, { 45, 40, 38, 255 });
+                    DrawCircleV({ x, visualY - 2.0f }, 3.5f, { 45, 40, 38, 255 });
                     break;
                 }
-                DrawCircleV({ x, y - 3.0f }, 5.0f, { 35, 105, 35, 255 });
-                DrawCircleV({ x - 3.0f, y - 2.0f }, 3.5f, { 45, 125, 45, 255 });
+                DrawCircleV({ x, visualY - 3.0f }, 5.0f, { 35, 105, 35, 255 });
+                DrawCircleV({ x - 3.0f, visualY - 2.0f }, 3.5f, { 45, 125, 45, 255 });
+                DrawCircleV({ x + 1.0f, visualY - 5.0f }, 2.8f, { 60, 142, 52, 255 });
                 static const Vector2 kBerryOffsets[5] = { { -2, -5 }, { 2, -4 }, { 0, -1 }, { -4, -2 }, { 3, -1 } };
                 for (int i = 0; i < n.amount && i < 5; ++i)
-                    DrawCircleV({ x + kBerryOffsets[i].x, y + kBerryOffsets[i].y }, 1.2f, { 200, 30, 50, 255 });
+                    DrawCircleV({ x + kBerryOffsets[i].x, visualY + kBerryOffsets[i].y }, 1.2f, { 200, 30, 50, 255 });
                 break;
             }
 
             case ResourceType::Rock:
+                DrawEllipse((int)x, (int)visualY, 6, 2, Fade(BLACK, 0.26f));
                 if (n.amount > 0) {
-                    DrawCircleV({ x, y - 3.0f }, 5.0f, { 110, 108, 105, 255 });
-                    DrawCircleV({ x + 2.5f, y - 2.0f }, 3.5f, { 135, 132, 128, 255 });
-                    DrawCircleV({ x - 1.5f, y - 5.0f }, 1.5f, { 170, 168, 165, 255 });
+                    DrawCircleV({ x, visualY - 3.0f }, 5.0f, { 110, 108, 105, 255 });
+                    DrawCircleV({ x + 2.5f, visualY - 2.0f }, 3.5f, { 135, 132, 128, 255 });
+                    DrawCircleV({ x - 1.5f, visualY - 5.0f }, 1.8f, { 172, 170, 166, 255 });
                 } else {
-                    DrawCircleV({ x, y - 1.0f }, 1.5f, { 120, 118, 115, 255 });
+                    DrawCircleV({ x, visualY - 1.0f }, 1.5f, { 120, 118, 115, 255 });
                 }
                 break;
 
@@ -339,18 +357,18 @@ void ResourceManager::Draw(const Camera2D& camera) const {
                 const float dir = n.facingLeft ? -1.0f : 1.0f;
                 const float legSwing = n.engaged ? 0.0f : std::sin(n.animTime * 12.0f) * 1.5f;
                 const Color fur = { 125, 85, 50, 255 };
-                DrawEllipse((int)x, (int)y, 6, 2, Fade(BLACK, 0.25f));
-                DrawLineEx({ x - 3.0f, y - 3.0f }, { x - 3.0f + legSwing, y }, 1.2f, { 80, 55, 30, 255 });
-                DrawLineEx({ x + 3.0f, y - 3.0f }, { x + 3.0f - legSwing, y }, 1.2f, { 80, 55, 30, 255 });
-                DrawEllipse((int)x, (int)(y - 4.0f), 6, 3, fur);
-                DrawCircleV({ x + 6.0f * dir, y - 6.0f }, 2.5f, fur);
-                DrawLineEx({ x + 6.0f * dir, y - 8.0f }, { x + 8.0f * dir, y - 10.5f }, 0.8f, { 230, 220, 200, 255 });
+                DrawEllipse((int)x, (int)visualY, 6, 2, Fade(BLACK, 0.25f));
+                DrawLineEx({ x - 3.0f, visualY - 3.0f }, { x - 3.0f + legSwing, visualY }, 1.2f, { 80, 55, 30, 255 });
+                DrawLineEx({ x + 3.0f, visualY - 3.0f }, { x + 3.0f - legSwing, visualY }, 1.2f, { 80, 55, 30, 255 });
+                DrawEllipse((int)x, (int)(visualY - 4.0f), 6, 3, fur);
+                DrawCircleV({ x + 6.0f * dir, visualY - 6.0f }, 2.5f, fur);
+                DrawLineEx({ x + 6.0f * dir, visualY - 8.0f }, { x + 8.0f * dir, visualY - 10.5f }, 0.8f, { 230, 220, 200, 255 });
                 if (n.panicTimer > 0.0f) {
-                    DrawText("!", (int)x - 1, (int)(y - 16.0f), 10, ORANGE);
+                    DrawText("!", (int)x - 1, (int)(visualY - 16.0f), 10, ORANGE);
                 }
                 if (n.hp < cfg::kAnimalHp) {   // Lebensbalken während der Jagd
-                    DrawRectangleRec({ x - 6.0f, y - 13.0f, 12.0f, 1.5f }, Fade(BLACK, 0.6f));
-                    DrawRectangleRec({ x - 6.0f, y - 13.0f, 12.0f * std::max(0.0f, n.hp) / cfg::kAnimalHp, 1.5f }, RED);
+                    DrawRectangleRec({ x - 6.0f, visualY - 13.0f, 12.0f, 1.5f }, Fade(BLACK, 0.6f));
+                    DrawRectangleRec({ x - 6.0f, visualY - 13.0f, 12.0f * std::max(0.0f, n.hp) / cfg::kAnimalHp, 1.5f }, RED);
                 }
                 break;
             }

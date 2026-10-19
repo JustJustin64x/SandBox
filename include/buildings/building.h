@@ -127,7 +127,7 @@ public:
     int GetMaxTier(BuildingType type) const;
     int TotalSleepingCapacity() const;
 
-    void Draw(float simTime) const;
+    void Draw(float simTime, const World* world = nullptr) const;
 
 private:
     void DrawBuilding(const Building& b, float simTime) const;

@@ -14,6 +14,7 @@ public:
     CameraController(int screenWidth, int screenHeight, Vector2 focus, float zoom = 2.0f);
 
     void Update(float deltaTime);
+    void SetTarget(Vector2 target) { camera_.target = target; }
     const Camera2D& Get() const { return camera_; }
     Vector2 ScreenToWorld(Vector2 screenPos) const { return GetScreenToWorld2D(screenPos, camera_); }
 

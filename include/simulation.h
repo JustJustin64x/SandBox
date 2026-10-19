@@ -53,6 +53,7 @@ public:
     SelectedAction GetCurrentAction() const { return currentAction_; }
     void SetCurrentAction(SelectedAction action);
     void CycleWeather();
+    void RegenerateWorld(uint32_t seed = 0);
     const EnvironmentalSystem& Env() const { return env_; }
 
     // Bricht aktives Zeichnen ab (z.B. wenn ein Menü geöffnet oder geschlossen wird)
@@ -60,17 +61,22 @@ public:
 
 private:
     void HandleInput();
-    void SpawnCaveman(Role role, Vector2 worldPos);
+    void SpawnCaveman(Role role, Vector2 worldPos, int preferredClanId = 1, Color clanColor = BLANK);
     void SpawnChildFromParents(Caveman& parentA, Caveman& parentB, Vector2 spawnPos);
     void SpawnAnimal(Vector2 worldPos);
+    std::vector<Vector2> FindTribeSpawnLocations(int count);
     void UpdateDemographicsAndFactions(float dt);
     void DrawRelationshipLines(const Caveman& selected) const;
     int GetAliveCount() const;
 
+    Tribe& CurrentUiTribe();
+    const Tribe& CurrentUiTribe() const;
+
     World world_;
     EnvironmentalSystem env_;
     CameraController camera_;
-    Tribe tribe_;
+    std::vector<std::unique_ptr<Tribe>> tribes_;
+    int activeTribeIndex_ = 0;
     ResourceManager resources_;
     std::vector<Caveman> cavemen_;
     SpriteSheet spriteSheet_;
@@ -82,7 +88,6 @@ private:
     float timeSpeed_ = 1.0f;
     float totalSimTime_ = 0.0f;
     float demographicTimer_ = 0.0f;
-    float schismTimer_ = 0.0f;
     int nextCavemanId_ = 1;
 
     // Aktive Aktion & Kachel-Auswahl (Standard: Normaler Cursor ohne Werkzeug)

@@ -354,8 +354,8 @@ void Tribe::DrawTerritoryOverlay(const World& world, float simTime) const {
         }
     };
 
-    // 1. Haupt-Siedlungsterritorium (Farbe des regierenden Clans oder Gold)
-    Color mainColor = GOLD;
+    // 1. Haupt-Siedlungsterritorium (Farbe des regierenden Clans oder Faktion)
+    Color mainColor = factionColor_;
     int chiefId = hierarchy_.GetChiefId();
     if (chiefId >= 0) {
         if (const Clan* rulingClan = hierarchy_.GetClan(hierarchy_.GetClanId(chiefId))) {
@@ -364,7 +364,7 @@ void Tribe::DrawTerritoryOverlay(const World& world, float simTime) const {
     }
     float mainRadius = 120.0f + (float)buildings_.GetMaxTier(BuildingType::TownCenter) * 20.0f;
     drawTerritoryZone(campPos_, mainRadius, mainColor,
-                      hierarchy_.GetKingdom().name.c_str(),
+                      name_.c_str(),
                       TextFormat("Hauptsiedlung (%s)", EraName(age_.CurrentEra())));
 
     // 2. Territorien abgespaltener Clans / Fraktionen
@@ -374,21 +374,25 @@ void Tribe::DrawTerritoryOverlay(const World& world, float simTime) const {
     }
 }
 
-void Tribe::Draw(float time) const {
-    buildings_.Draw(time);
-    DrawStockpile();
+void Tribe::Draw(float time, const World* world) const {
+    buildings_.Draw(time, world);
+    DrawStockpile(world);
 
     // Wenn der Siedlungsplaner auf Rohstoffe für das nächste Projekt wartet, dezentes Planungs-Banner am Lager
     if (planner_.active) {
-        Vector2 p = { campPos_.x, campPos_.y + 18.0f };
+        float visualY = campPos_.y + 18.0f + (world ? world->GetVisualYOffset(campPos_) : 0.0f);
+        Vector2 p = { campPos_.x, visualY };
         int tw = MeasureText(planner_.description.c_str(), 8);
         DrawRectangle((int)p.x - tw / 2 - 3, (int)p.y - 1, tw + 6, 10, Fade(BLACK, 0.65f));
         DrawText(planner_.description.c_str(), (int)p.x - tw / 2, (int)p.y, 8, Fade(GOLD, 0.9f));
     }
 }
 
-void Tribe::DrawStockpile() const {
-    const Vector2 p = StockpilePosition();
+void Tribe::DrawStockpile(const World* world) const {
+    Vector2 p = StockpilePosition();
+    if (world) {
+        p.y += world->GetVisualYOffset(p);
+    }
     DrawRectangleRec({ p.x - 11.0f, p.y - 2.0f, 24.0f, 6.0f }, Fade(BLACK, 0.25f));
 
     // Holzstapel

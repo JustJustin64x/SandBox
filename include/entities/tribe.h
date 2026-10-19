@@ -39,6 +39,15 @@ class Tribe {
 public:
     explicit Tribe(Vector2 campPosition);
 
+    int Id() const { return id_; }
+    const std::string& Name() const { return name_; }
+    Color FactionColor() const { return factionColor_; }
+    void SetIdentity(int id, const std::string& name, Color color) {
+        id_ = id;
+        name_ = name;
+        factionColor_ = color;
+    }
+
     void InitWorld(const World& world);
 
     Stockpile& Stock() { return stock_; }
@@ -66,7 +75,7 @@ public:
     Vector2 StockpilePosition() const { return { campPos_.x + 22.0f, campPos_.y + 2.0f }; }
 
     void Update(const World& world, const std::vector<Caveman>& cavemen, int population, float dt, EventLog& log);
-    void Draw(float time) const;
+    void Draw(float time, const World* world = nullptr) const;
 
     // --- Autonomer Siedlungsplaner (Stufe 1: Zero-Player-Bauentwicklung) -----
     struct SettlementPlan {
@@ -104,9 +113,12 @@ public:
 private:
     void UpdateSettlementPlanner(const World& world, const std::vector<Caveman>& cavemen, int population, float dt, EventLog& log);
     bool FindBuildingSpot(const World& world, Vector2& out) const;
-    void DrawStockpile() const;
+    void DrawStockpile(const World* world = nullptr) const;
 
     Vector2 campPos_;
+    int id_ = 1;
+    std::string name_ = "Sonnen-Clan";
+    Color factionColor_ = Color{ 215, 50, 50, 255 };
     Stockpile stock_;
     BuildingManager buildings_;
     AgeManager age_;
