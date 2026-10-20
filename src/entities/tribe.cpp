@@ -4,6 +4,7 @@
 #include "environmental_system.h"
 #include "event_log.h"
 #include "world.h"
+#include "font_manager.h"
 
 #include <algorithm>
 #include <cmath>
@@ -698,35 +699,27 @@ void Tribe::DrawTerritoryOverlay(const World& world, float /*simTime*/) const {
             }
         }
     }
-
-    // Zentriertes Territoriums-Banner über dem TownCenter (30px höher)
-    float campYOffset = world.GetVisualYOffset(campPos_);
-    Vector2 labelPos = { campPos_.x, campPos_.y - 62.0f + campYOffset };
-    int tw = MeasureText(name_.c_str(), 11);
-    DrawRectangle((int)labelPos.x - tw / 2 - 5, (int)labelPos.y - 4, tw + 10, 20, Fade(BLACK, 0.82f));
-    DrawRectangleLines((int)labelPos.x - tw / 2 - 5, (int)labelPos.y - 4, tw + 10, 20, mainColor);
-    DrawText(name_.c_str(), (int)labelPos.x - tw / 2, (int)labelPos.y, 11, mainColor);
 }
 
 void Tribe::Draw(float time, const World* world, Vector2 mouseWorld) const {
     buildings_.Draw(time, world, mouseWorld);
     DrawStockpile(world);
 
-    // Clan-Banner 30px höher über dem Lagerfeuer/TownCenter
+    // Clan-Banner über dem Lagerfeuer/TownCenter (saubere Schrift & sanfte Ecken)
     float campYOffset = world ? world->GetVisualYOffset(campPos_) : 0.0f;
-    Vector2 labelPos = { campPos_.x, campPos_.y - 62.0f + campYOffset };
-    int tw = MeasureText(name_.c_str(), 11);
-    DrawRectangle((int)labelPos.x - tw / 2 - 5, (int)labelPos.y - 4, tw + 10, 20, Fade(BLACK, 0.82f));
-    DrawRectangleLines((int)labelPos.x - tw / 2 - 5, (int)labelPos.y - 4, tw + 10, 20, factionColor_);
-    DrawText(name_.c_str(), (int)labelPos.x - tw / 2, (int)labelPos.y, 11, factionColor_);
+    Vector2 labelPos = { campPos_.x, campPos_.y - 58.0f + campYOffset };
+    float tw = FontManager::MeasureText(name_.c_str(), 13.0f);
+    DrawRectangleRounded({ labelPos.x - tw * 0.5f - 6.0f, labelPos.y - 3.0f, tw + 12.0f, 18.0f }, 0.35f, 4, Fade(Color{ 14, 18, 24, 255 }, 0.88f));
+    DrawRectangleRoundedLinesEx({ labelPos.x - tw * 0.5f - 6.0f, labelPos.y - 3.0f, tw + 12.0f, 18.0f }, 0.35f, 4, 1.2f, factionColor_);
+    FontManager::DrawTextCenteredShadow(name_.c_str(), labelPos.x, labelPos.y, 13.0f, factionColor_);
 
-    // Wenn der Siedlungsplaner auf Rohstoffe für das nächste Projekt wartet, dezentes Planungs-Banner am Lager
+    // Wenn der Siedlungsplaner auf Rohstoffe wartet: Dezente Info oberhalb des Banners (stört das Feuer nicht)
     if (planner_.active) {
-        float visualY = campPos_.y + 18.0f + campYOffset;
+        float visualY = campPos_.y - 78.0f + campYOffset;
         Vector2 p = { campPos_.x, visualY };
-        int pw = MeasureText(planner_.description.c_str(), 8);
-        DrawRectangle((int)p.x - pw / 2 - 3, (int)p.y - 1, pw + 6, 10, Fade(BLACK, 0.65f));
-        DrawText(planner_.description.c_str(), (int)p.x - pw / 2, (int)p.y, 8, Fade(GOLD, 0.9f));
+        float pw = FontManager::MeasureText(planner_.description.c_str(), 11.0f);
+        DrawRectangleRounded({ p.x - pw * 0.5f - 6.0f, p.y - 2.0f, pw + 12.0f, 16.0f }, 0.35f, 3, Fade(BLACK, 0.75f));
+        FontManager::DrawTextCenteredShadow(planner_.description.c_str(), p.x, p.y, 11.0f, Fade(GOLD, 0.95f));
     }
 }
 

@@ -505,22 +505,19 @@ void Simulation::HandleInput() {
 
     Vector2 mouseScreen = GetMousePosition();
 
-    // Klickbare Zivilisations-Badges zum Wechseln der beobachteten Zivilisation
-    float tabX = 14.0f;
-    float tabY = 110.0f;
+    // Klickbare Zivilisations-Badges zum Wechseln der beobachteten Zivilisation (in der oberen Leiste)
+    float tabX = 135.0f;
+    float tabY = 9.0f;
+    float tabW = 102.0f;
+    float tabH = 26.0f;
     for (size_t i = 0; i < tribes_.size(); ++i) {
-        if (tabX + 130.0f > (float)GetScreenWidth() - 14.0f) {
-            tabX = 14.0f;
-            tabY += 30.0f;
-        }
-        Rectangle tabR = { tabX, tabY, 130.0f, 26.0f };
+        Rectangle tabR = { tabX + (float)i * 108.0f, tabY, tabW, tabH };
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseScreen, tabR)) {
             activeTribeIndex_ = (int)i;
             camera_.SetTarget(tribes_[i]->CampPosition());
             CancelActiveInput();
             return;
         }
-        tabX += 136.0f;
     }
 
     // Wenn der Skilltree geöffnet ist, Eingaben exklusiv an das Overlay leiten
@@ -530,14 +527,14 @@ void Simulation::HandleInput() {
     }
 
     // Klick auf den Territorien-Button oder Skilltree-Button in der oberen Leiste
-    Rectangle btnTerritory = { (float)SCREEN_WIDTH - 368.0f, 10.0f, 122.0f, 28.0f };
+    Rectangle btnTerritory = { (float)SCREEN_WIDTH - 275.0f, 8.0f, 118.0f, 28.0f };
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseScreen, btnTerritory)) {
         showTerritoryOverlay_ = !showTerritoryOverlay_;
         CancelActiveInput();
         return;
     }
 
-    Rectangle btnSkillTree = { (float)SCREEN_WIDTH - 240.0f, 10.0f, 130.0f, 28.0f };
+    Rectangle btnSkillTree = { (float)SCREEN_WIDTH - 148.0f, 8.0f, 95.0f, 28.0f };
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseScreen, btnSkillTree)) {
         skillTreeUI_.Toggle();
         CancelActiveInput();
@@ -556,20 +553,27 @@ void Simulation::HandleInput() {
 
     bool outOfVirtualScreen = (mouseScreen.x < 0.0f || mouseScreen.x > (float)SCREEN_WIDTH ||
                                mouseScreen.y < 0.0f || mouseScreen.y > (float)SCREEN_HEIGHT);
-    bool inTopBar = (mouseScreen.y <= 48);
-    bool inBottomHUD = (mouseScreen.y >= SCREEN_HEIGHT - 38 && mouseScreen.x <= 560);
+    bool inTopBar = (mouseScreen.y <= 44.0f);
+    bool inSubBar = (mouseScreen.y <= 74.0f && mouseScreen.x <= 560.0f);
+    bool inBottomHUD = (mouseScreen.y >= SCREEN_HEIGHT - 38.0f && mouseScreen.x <= 380.0f);
     bool inInspector = false;
     if (selectedCavemanId_ != -1) {
-        float panelW = 320.0f;
-        float panelH = 445.0f;
-        float panelX = (float)SCREEN_WIDTH - panelW - 16.0f;
-        float panelY = 60.0f;
+        float panelW = 330.0f;
+        float panelH = 575.0f;
+        float panelX = (float)SCREEN_WIDTH - panelW - 14.0f;
+        float panelY = 52.0f;
         Rectangle inspRect = { panelX, panelY, panelW, panelH };
         if (CheckCollisionPointRec(mouseScreen, inspRect)) {
             inInspector = true;
+            // Schließen-Button oben rechts [ESC] anklickbar
+            Rectangle btnClose = { panelX + panelW - 52.0f, panelY + 6.0f, 40.0f, 24.0f };
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseScreen, btnClose)) {
+                selectedCavemanId_ = -1;
+                return;
+            }
         }
     }
-    bool canInteractWithWorld = !outOfVirtualScreen && !inTopBar && !inBottomHUD && !inInspector;
+    bool canInteractWithWorld = !outOfVirtualScreen && !inTopBar && !inSubBar && !inBottomHUD && !inInspector;
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         if (canInteractWithWorld) {
@@ -1031,36 +1035,40 @@ void Simulation::DrawRelationshipLines(const Caveman& selected) const {
 
         Color lineColor = BLANK;
         const char* relLabel = nullptr;
-        float thickness = 1.4f;
+        float thickness = 1.2f;
 
         if (isPartner || tag == RelationshipTag::Partner) {
             lineColor = Color{ 255, 105, 180, 235 }; // Pink: Partner
             relLabel = "Partner";
-            thickness = 2.2f;
-        } else if (isKin) {
-            lineColor = Color{ 255, 215, 70, 225 };  // Gold: Familie/Verwandtschaft
-            relLabel = "Familie";
-            thickness = 1.9f;
-        } else if (tag == RelationshipTag::BestFriend || tag == RelationshipTag::Friend) {
-            lineColor = Color{ 90, 235, 115, 210 };  // Grün: Freunde
-            relLabel = (tag == RelationshipTag::BestFriend) ? "Bester Freund" : "Freund";
-            thickness = 1.6f;
+            thickness = 2.0f;
         } else if (tag == RelationshipTag::Enemy || tag == RelationshipTag::Rival) {
             lineColor = Color{ 245, 70, 70, 215 };   // Rot: Rivalen/Feinde
             relLabel = (tag == RelationshipTag::Enemy) ? "Feind" : "Rivale";
-            thickness = 1.6f;
+            thickness = 1.5f;
+        } else if (tag == RelationshipTag::BestFriend) {
+            lineColor = Color{ 90, 235, 115, 210 };  // Grün: Bester Freund
+            relLabel = "Bester Freund";
+            thickness = 1.5f;
+        } else if (isKin) {
+            lineColor = Color{ 255, 215, 70, 160 };  // Gold: Familie/Verwandtschaft
+            thickness = 1.2f;
+        } else if (tag == RelationshipTag::Friend) {
+            lineColor = Color{ 90, 235, 115, 140 };  // Grün: Freunde
+            thickness = 1.0f;
         }
 
-        if (relLabel != nullptr) {
+        if (lineColor.a > 0) {
             float toYOffset = world_.GetVisualYOffset(other.Position());
             Vector2 to = { other.Position().x, other.Position().y - 8.0f + toYOffset };
             DrawLineEx(from, to, thickness, lineColor);
-            DrawCircleV(to, 2.8f, lineColor);
+            DrawCircleV(to, 2.5f, lineColor);
 
-            Vector2 mid = { (from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f - 6.0f };
-            float tw = FontManager::MeasureText(relLabel, 11.0f);
-            DrawRectangle((int)(mid.x - tw * 0.5f - 3.0f), (int)(mid.y - 1.0f), (int)(tw + 6.0f), 14, Fade(BLACK, 0.78f));
-            FontManager::DrawTextShadow(relLabel, mid.x - tw * 0.5f, mid.y, 11.0f, lineColor);
+            if (relLabel != nullptr) {
+                Vector2 mid = { (from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f - 6.0f };
+                float tw = FontManager::MeasureText(relLabel, 11.0f);
+                DrawRectangleRounded({ mid.x - tw * 0.5f - 4.0f, mid.y - 1.0f, tw + 8.0f, 15.0f }, 0.35f, 3, Fade(BLACK, 0.75f));
+                FontManager::DrawTextCenteredShadow(relLabel, mid.x, mid.y + 1.0f, 11.0f, lineColor);
+            }
         }
     }
 }
@@ -1169,113 +1177,121 @@ void Simulation::DrawUI() const {
     env_.DrawWeatherOverlay(screenW, screenH, totalSimTime_);
 
     const Tribe& uiTribe = CurrentUiTribe();
+    Vector2 mouseScreen = GetMousePosition();
 
-    // Autonomer Siedlungsplaner & God-Sim Status oben links unter der Statusleiste
-    DrawRectangle(14, 56, 380, 48, Fade(BLACK, 0.85f));
-    DrawRectangleLines(14, 56, 380, 48, uiTribe.FactionColor());
-    FontManager::DrawTextShadow(TextFormat("Zivilisation: %s", uiTribe.Name().c_str()), 22.0f, 61.0f, 15.0f, uiTribe.FactionColor());
-    const char* planText = uiTribe.CurrentPlan().active
-        ? TextFormat("Siedlungsplan: %s", uiTribe.CurrentPlan().description.c_str())
-        : "Siedlungsplan: Vollständig ausgebaut / Autonom aktiv";
-    FontManager::DrawTextShadow(planText, 22.0f, 81.0f, 14.0f, RAYWHITE);
+    // -------------------------------------------------------------------------
+    // 1. Obere Statusleiste (y: 0..44) - Schlank, modern, kein Textüberlauf!
+    // -------------------------------------------------------------------------
+    DrawRectangle(0, 0, screenW, 44, Fade(Color{ 14, 17, 23, 255 }, 0.94f));
+    DrawLine(0, 44, screenW, 44, Fade(GRAY, 0.35f));
+
+    // Logo / Titel
+    FontManager::DrawTextShadow("PRIMITIVE", 16.0f, 12.0f, 20.0f, RAYWHITE);
 
     // Zivilisations-Badges zum schnellen Durchschalten der Stämme
-    float tabX = 14.0f;
-    float tabY = 110.0f;
-    Vector2 mouseScreen = GetMousePosition();
+    float tabX = 135.0f;
+    float tabY = 9.0f;
+    float tabW = 102.0f;
+    float tabH = 26.0f;
     for (size_t i = 0; i < tribes_.size(); ++i) {
-        if (tabX + 130.0f > (float)screenW - 14.0f) {
-            tabX = 14.0f;
-            tabY += 30.0f;
-        }
         bool isActive = ((int)i == activeTribeIndex_);
         bool isDisbanded = tribes_[i]->IsDisbanded();
-        Rectangle tabR = { tabX, tabY, 130.0f, 26.0f };
+        Rectangle tabR = { tabX + (float)i * 108.0f, tabY, tabW, tabH };
         bool hov = CheckCollisionPointRec(mouseScreen, tabR);
         Color baseCol = isDisbanded ? DARKGRAY : tribes_[i]->FactionColor();
-        DrawRectangleRec(tabR, isActive ? Fade(baseCol, 0.90f) : (hov ? Fade(baseCol, 0.50f) : Fade(BLACK, 0.78f)));
-        DrawRectangleLinesEx(tabR, isActive ? 2.0f : 1.0f, isActive ? GOLD : (isDisbanded ? GRAY : tribes_[i]->FactionColor()));
-        std::string tabLabel = TextFormat("[%d] %s%s", (int)i + 1, tribes_[i]->Name().c_str(), isDisbanded ? " (Zerfallen)" : "");
+
+        DrawRectangleRounded(tabR, 0.35f, 4, isActive ? Fade(baseCol, 0.85f) : (hov ? Fade(baseCol, 0.45f) : Fade(BLACK, 0.70f)));
+        DrawRectangleRoundedLinesEx(tabR, 0.35f, 4, isActive ? 1.8f : 1.0f, isActive ? GOLD : (isDisbanded ? GRAY : baseCol));
+
+        std::string tabLabel = TextFormat("[%d] %s", (int)i + 1, tribes_[i]->Name().c_str());
         FontManager::DrawTextCenteredShadow(tabLabel.c_str(),
                                             tabR.x + tabR.width * 0.5f, tabR.y + 5.0f, 13.0f, isDisbanded ? LIGHTGRAY : RAYWHITE);
-        tabX += 136.0f;
     }
 
-    // -------------------------------------------------------------------------
-    // 1. Obere Statusleiste
-    // -------------------------------------------------------------------------
-    DrawRectangle(0, 0, screenW, 50, Fade(BLACK, 0.90f));
-    DrawRectangleLines(0, 0, screenW, 50, Fade(GRAY, 0.5f));
-
-    FontManager::DrawTextShadow("PRIMITIVE SANDBOX", 16.0f, 12.0f, 22.0f, RAYWHITE);
-
-    // Zeitalter & Kausales 14-Epochen-Modell der aktiven Zivilisation mit Statusanzeige
-    Era era = uiTribe.Age().CurrentEra();
-    HistoricalEpoch curEpoch = uiTribe.Age().CurrentEpoch();
-
-    float timeOfDay = std::fmod(totalSimTime_, cfg::kDayCycleDuration) / cfg::kDayCycleDuration;
-    bool isNight = (timeOfDay > 0.72f || timeOfDay < 0.22f);
-    std::string speedStr = isPaused_ ? "PAUSE" : TextFormat("%.0fx", timeSpeed_);
-
-    std::string epochSummary = TextFormat("%s | %s | %s [%s]",
-                                          HistoricalEpochName(curEpoch),
-                                          isNight ? "NACHT" : "TAG",
-                                          WeatherTypeName(env_.GetWeather()),
-                                          speedStr.c_str());
-
-    FontManager::DrawTextShadow(epochSummary.c_str(), 235.0f, 15.0f, 15.0f, EraColor(era));
-
-    // Lager-Vorräte (Rohstoffe & Veredelt) der aktiven Zivilisation
+    // Vorräte & Ressourcen in der Mitte (sauber platziert ab x = 485)
     const auto& stock = uiTribe.Stock();
     int clanPop = 0;
     for (const auto& c : cavemen_) {
         if (c.IsAlive() && c.ClanId() == uiTribe.Id()) clanPop++;
     }
     int sleepCap = uiTribe.SleepingCapacity();
+    float stockX = 485.0f;
+    float stockY = 14.0f;
 
-    float stockX = 245.0f + FontManager::MeasureText(epochSummary.c_str(), 15.0f) + 20.0f;
+    // Pop
+    FontManager::DrawTextShadow(TextFormat("👥 %d", clanPop), stockX, stockY, 14.0f, RAYWHITE);
+    stockX += 58.0f;
 
-    FontManager::DrawTextShadow(TextFormat("Pop: %d", clanPop), stockX, 15.0f, 15.0f, RAYWHITE);
-    stockX += 72.0f;
-
-    // Invertiertes Betten-Verhältnis (Betten/Pop, rot wenn Betten fehlen)
+    // Betten
     Color bedCol = (clanPop > sleepCap) ? RED : ((sleepCap == clanPop) ? GOLD : LIME);
-    FontManager::DrawTextShadow(TextFormat("Betten: %d/%d", sleepCap, clanPop), stockX, 15.0f, 15.0f, bedCol);
-    stockX += 105.0f;
+    FontManager::DrawTextShadow(TextFormat("🛏️ %d/%d", sleepCap, clanPop), stockX, stockY, 14.0f, bedCol);
+    stockX += 78.0f;
 
-    FontManager::DrawTextShadow(TextFormat("Nahrung: %d (+%d)", stock.food, stock.cookedFood), stockX, 15.0f, 15.0f,
-                                (stock.food + stock.cookedFood > 5) ? LIME : RED);
-    stockX += 135.0f;
-
-    FontManager::DrawTextShadow(TextFormat("Holz: %d", stock.wood), stockX, 15.0f, 15.0f, Color{ 215, 155, 80, 255 });
-    stockX += 75.0f;
-    FontManager::DrawTextShadow(TextFormat("Stein: %d", stock.stone), stockX, 15.0f, 15.0f, Color{ 200, 200, 200, 255 });
-    stockX += 75.0f;
-    FontManager::DrawTextShadow(TextFormat("Fell: %d", stock.hides), stockX, 15.0f, 15.0f, Color{ 225, 180, 125, 255 });
-    stockX += 70.0f;
-
-    if (stock.planks > 0 || stock.bricks > 0 || era >= Era::BronzeAge) {
-        FontManager::DrawTextShadow(TextFormat("Balken: %d", stock.planks), stockX, 15.0f, 15.0f, Color{ 240, 185, 105, 255 });
-        stockX += 85.0f;
-        FontManager::DrawTextShadow(TextFormat("Ziegel: %d", stock.bricks), stockX, 15.0f, 15.0f, Color{ 215, 215, 225, 255 });
+    // Nahrung
+    Color foodCol = (stock.food + stock.cookedFood > 5) ? LIME : RED;
+    if (stock.cookedFood > 0) {
+        FontManager::DrawTextShadow(TextFormat("🍖 %d(+%d)", stock.food, stock.cookedFood), stockX, stockY, 14.0f, foodCol);
+        stockX += 88.0f;
+    } else {
+        FontManager::DrawTextShadow(TextFormat("🍖 %d", stock.food), stockX, stockY, 14.0f, foodCol);
+        stockX += 65.0f;
     }
 
-    // Territorien-Button & Skilltree-Button
-    Rectangle btnTerritory = { (float)screenW - 370.0f, 9.0f, 130.0f, 32.0f };
+    // Holz, Stein, Fell
+    FontManager::DrawTextShadow(TextFormat("🪵 %d", stock.wood), stockX, stockY, 14.0f, Color{ 220, 165, 95, 255 });
+    stockX += 60.0f;
+    FontManager::DrawTextShadow(TextFormat("🪨 %d", stock.stone), stockX, stockY, 14.0f, Color{ 205, 205, 210, 255 });
+    stockX += 60.0f;
+    FontManager::DrawTextShadow(TextFormat("🥋 %d", stock.hides), stockX, stockY, 14.0f, Color{ 225, 185, 135, 255 });
+    stockX += 55.0f;
+
+    // Veredelte Güter (nur wenn vorhanden)
+    if (stock.planks > 0) {
+        FontManager::DrawTextShadow(TextFormat("🪵+ %d", stock.planks), stockX, stockY, 14.0f, Color{ 245, 195, 115, 255 });
+        stockX += 62.0f;
+    }
+    if (stock.bricks > 0) {
+        FontManager::DrawTextShadow(TextFormat("🧱 %d", stock.bricks), stockX, stockY, 14.0f, Color{ 225, 225, 235, 255 });
+        stockX += 58.0f;
+    }
+
+    // Buttons rechts: [T] Territorien & [K] Skilltree & FPS
+    Rectangle btnTerritory = { (float)screenW - 275.0f, 8.0f, 118.0f, 28.0f };
     bool hovTerr = CheckCollisionPointRec(mouseScreen, btnTerritory);
-    DrawRectangleRec(btnTerritory, showTerritoryOverlay_ ? Color{ 70, 110, 65, 255 } : (hovTerr ? Color{ 45, 70, 55, 255 } : Color{ 28, 42, 35, 255 }));
-    DrawRectangleLinesEx(btnTerritory, 1.2f, showTerritoryOverlay_ ? LIME : SKYBLUE);
-    FontManager::DrawTextCenteredShadow("[T] Territorien", btnTerritory.x + btnTerritory.width * 0.5f, btnTerritory.y + 6.0f, 15.0f, showTerritoryOverlay_ ? LIME : SKYBLUE);
+    DrawRectangleRounded(btnTerritory, 0.25f, 4,
+                         showTerritoryOverlay_ ? Color{ 55, 95, 50, 255 } : (hovTerr ? Color{ 40, 58, 48, 255 } : Color{ 25, 36, 30, 255 }));
+    DrawRectangleRoundedLinesEx(btnTerritory, 0.25f, 4, 1.2f, showTerritoryOverlay_ ? LIME : SKYBLUE);
+    FontManager::DrawTextCenteredShadow("[T] Territorium", btnTerritory.x + btnTerritory.width * 0.5f, btnTerritory.y + 6.0f, 14.0f,
+                                        showTerritoryOverlay_ ? LIME : SKYBLUE);
 
-    Rectangle btnSkillTree = { (float)screenW - 225.0f, 9.0f, 135.0f, 32.0f };
+    Rectangle btnSkillTree = { (float)screenW - 148.0f, 8.0f, 95.0f, 28.0f };
     bool hovTree = CheckCollisionPointRec(mouseScreen, btnSkillTree);
-    DrawRectangleRec(btnSkillTree, hovTree ? Color{ 55, 80, 130, 255 } : Color{ 32, 45, 75, 255 });
-    DrawRectangleLinesEx(btnSkillTree, 1.2f, GOLD);
-    FontManager::DrawTextCenteredShadow("[K] Skilltree", btnSkillTree.x + btnSkillTree.width * 0.5f, btnSkillTree.y + 6.0f, 16.0f, GOLD);
+    DrawRectangleRounded(btnSkillTree, 0.25f, 4, hovTree ? Color{ 50, 75, 120, 255 } : Color{ 30, 42, 68, 255 });
+    DrawRectangleRoundedLinesEx(btnSkillTree, 0.25f, 4, 1.2f, GOLD);
+    FontManager::DrawTextCenteredShadow("[K] Skilltree", btnSkillTree.x + btnSkillTree.width * 0.5f, btnSkillTree.y + 6.0f, 14.0f, GOLD);
 
-    DrawFPS(screenW - 75, 15);
+    DrawFPS(screenW - 44, 14);
 
-    // Statusleiste für Territorien bei aktivem Overlay (Phase 4)
+    // -------------------------------------------------------------------------
+    // 1b. Dezent schwebende Status-Pille (y = 48) - Ersetzt klobige 380px-Kästen
+    // -------------------------------------------------------------------------
+    Era era = uiTribe.Age().CurrentEra();
+    HistoricalEpoch curEpoch = uiTribe.Age().CurrentEpoch();
+    float timeOfDay = std::fmod(totalSimTime_, cfg::kDayCycleDuration) / cfg::kDayCycleDuration;
+    bool isNight = (timeOfDay > 0.72f || timeOfDay < 0.22f);
+    std::string speedStr = isPaused_ ? "PAUSE" : TextFormat("%.0fx", timeSpeed_);
+
+    std::string epochSummary = TextFormat("%s  •  %s  •  %s  [%s]",
+                                          HistoricalEpochName(curEpoch),
+                                          isNight ? "Nacht" : "Tag",
+                                          WeatherTypeName(env_.GetWeather()),
+                                          speedStr.c_str());
+    float epW = FontManager::MeasureText(epochSummary.c_str(), 13.0f);
+    DrawRectangleRounded({ 14.0f, 48.0f, epW + 18.0f, 24.0f }, 0.4f, 4, Fade(Color{ 14, 18, 24, 255 }, 0.88f));
+    DrawRectangleRoundedLinesEx({ 14.0f, 48.0f, epW + 18.0f, 24.0f }, 0.4f, 4, 1.0f, Fade(EraColor(era), 0.75f));
+    FontManager::DrawTextShadow(epochSummary.c_str(), 23.0f, 53.0f, 13.0f, EraColor(era));
+
+    // Territorium-Status (wenn [T] aktiv) oder Siedlungsplan-Chip
     if (showTerritoryOverlay_) {
         int currentTiles = uiTribe.CurrentTerritoryCount();
         int maxCapacity = uiTribe.MaxTerritoryCapacity();
@@ -1284,15 +1300,20 @@ void Simulation::DrawUI() const {
             if (b.IsTerritoryAnchor()) anchorCount++;
         }
         std::string focusText = uiTribe.GetExpansionTarget().active ? uiTribe.GetExpansionTarget().reason : "Kernland";
-        std::string territoryInfo = TextFormat("Territorium: %d / %d Kacheln  |  Anker: %d  |  Fokus: %s",
-                                               currentTiles, maxCapacity, anchorCount, focusText.c_str());
-
-        int textW = MeasureText(territoryInfo.c_str(), 14);
-        int barW = textW + 36;
-        int barX = (screenW - barW) / 2;
-        DrawRectangle(barX, 54, barW, 26, Fade(BLACK, 0.88f));
-        DrawRectangleLines(barX, 54, barW, 26, uiTribe.FactionColor());
-        FontManager::DrawTextCenteredShadow(territoryInfo.c_str(), barX + barW * 0.5f, 58.0f, 14.0f, uiTribe.FactionColor());
+        std::string terrInfo = TextFormat("Territorium: %d / %d Kacheln (Anker: %d) • Fokus: %s",
+                                          currentTiles, maxCapacity, anchorCount, focusText.c_str());
+        float tw = FontManager::MeasureText(terrInfo.c_str(), 13.0f);
+        float tx = 14.0f + epW + 26.0f;
+        DrawRectangleRounded({ tx, 48.0f, tw + 18.0f, 24.0f }, 0.4f, 4, Fade(Color{ 14, 18, 24, 255 }, 0.88f));
+        DrawRectangleRoundedLinesEx({ tx, 48.0f, tw + 18.0f, 24.0f }, 0.4f, 4, 1.0f, Fade(uiTribe.FactionColor(), 0.85f));
+        FontManager::DrawTextShadow(terrInfo.c_str(), tx + 9.0f, 53.0f, 13.0f, uiTribe.FactionColor());
+    } else if (uiTribe.CurrentPlan().active) {
+        std::string planText = TextFormat("Bauprojekt: %s", uiTribe.CurrentPlan().description.c_str());
+        float pw = FontManager::MeasureText(planText.c_str(), 13.0f);
+        float px = 14.0f + epW + 26.0f;
+        DrawRectangleRounded({ px, 48.0f, pw + 18.0f, 24.0f }, 0.4f, 4, Fade(Color{ 14, 18, 24, 255 }, 0.88f));
+        DrawRectangleRoundedLinesEx({ px, 48.0f, pw + 18.0f, 24.0f }, 0.4f, 4, 1.0f, Fade(GOLD, 0.70f));
+        FontManager::DrawTextShadow(planText.c_str(), px + 9.0f, 53.0f, 13.0f, RAYWHITE);
     }
 
     // -------------------------------------------------------------------------
@@ -1307,13 +1328,16 @@ void Simulation::DrawUI() const {
     }
 
     if (selected) {
-        int panelW = 340;
-        int panelH = 580;
-        int panelX = screenW - panelW - 16;
-        int panelY = 60;
+        int panelW = 330;
+        int panelH = 575;
+        int panelX = screenW - panelW - 14;
+        int panelY = 52;
 
-        DrawRectangle(panelX, panelY, panelW, panelH, Fade(BLACK, 0.92f));
-        DrawRectangleLines(panelX, panelY, panelW, panelH, RoleColor(selected->GetRole()));
+        DrawRectangleRounded({ (float)panelX, (float)panelY, (float)panelW, (float)panelH }, 0.035f, 6, Fade(Color{ 14, 18, 24, 255 }, 0.94f));
+        DrawRectangleRoundedLinesEx({ (float)panelX, (float)panelY, (float)panelW, (float)panelH }, 0.035f, 6, 1.5f, Fade(RoleColor(selected->GetRole()), 0.85f));
+
+        // Schließen-Button oben rechts
+        FontManager::DrawTextShadow("[ESC]", panelX + panelW - 48.0f, panelY + 12.0f, 12.0f, GRAY);
 
         // Name, Geschlecht, Rolle & Lebensalter
         FontManager::DrawTextShadow(TextFormat("%s  %s", selected->Name().c_str(), selected->GenderSymbol()),
@@ -1381,14 +1405,15 @@ void Simulation::DrawUI() const {
         FontManager::DrawTextShadow(TextFormat("Tätigkeit: %s", selected->ActivityText().c_str()), panelX + 14.0f, panelY + 150.0f, 14.0f, LIGHTGRAY);
 
         auto drawStatBar = [&](const char* label, float val, float maxVal, int y, Color barColor) {
-            FontManager::DrawTextShadow(TextFormat("%s: %.0f/%.0f", label, val, maxVal), panelX + 14.0f, (float)y, 13.0f, RAYWHITE);
-            int barX = panelX + 130;
-            int barW = 185;
-            int barH = 11;
-            DrawRectangle(barX, y + 2, barW, barH, Fade(GRAY, 0.4f));
+            FontManager::DrawTextShadow(TextFormat("%s: %.0f/%.0f", label, val, maxVal), panelX + 14.0f, (float)y, 12.0f, RAYWHITE);
+            int barX = panelX + 124;
+            int barW = 188;
+            int barH = 10;
+            DrawRectangleRounded({ (float)barX, (float)y + 2.0f, (float)barW, (float)barH }, 0.4f, 3, Fade(GRAY, 0.35f));
             float pct = std::clamp(val / maxVal, 0.0f, 1.0f);
-            DrawRectangle(barX, y + 2, (int)(barW * pct), barH, barColor);
-            DrawRectangleLines(barX, y + 2, barW, barH, Fade(WHITE, 0.5f));
+            if (pct > 0.01f) {
+                DrawRectangleRounded({ (float)barX, (float)y + 2.0f, (float)barW * pct, (float)barH }, 0.4f, 3, barColor);
+            }
         };
 
         drawStatBar("HP", selected->Hp(), 100.0f, panelY + 172, (selected->Hp() > 50) ? GREEN : RED);
@@ -1488,24 +1513,25 @@ void Simulation::DrawUI() const {
     }
 
     // -------------------------------------------------------------------------
-    // 3. Ereignis-Log (unten links)
+    // 3. Ereignis-Log (unten links) - Schlankes Toast-Feed
     // -------------------------------------------------------------------------
     const auto& logEntries = eventLog_.Entries();
     if (!logEntries.empty()) {
-        float maxTextW = 220.0f;
+        float maxTextW = 200.0f;
         for (const auto& entry : logEntries) {
-            float tw = FontManager::MeasureText(entry.text.c_str(), 14.0f);
+            float tw = FontManager::MeasureText(entry.text.c_str(), 13.0f);
             if (tw > maxTextW) maxTextW = tw;
         }
-        int totalH = (int)logEntries.size() * 22 + 8;
-        int boxY = screenH - 58 - (int)logEntries.size() * 22 - 4;
-        DrawRectangleRounded({ 12.0f, (float)boxY, maxTextW + 24.0f, (float)totalH }, 0.15f, 4, Fade(BLACK, 0.78f));
-        DrawRectangleRoundedLines({ 12.0f, (float)boxY, maxTextW + 24.0f, (float)totalH }, 0.15f, 4, Fade(GRAY, 0.40f));
+        maxTextW = std::min(maxTextW, (float)screenW * 0.40f);
+        int totalH = (int)logEntries.size() * 20 + 8;
+        int boxY = screenH - 42 - (int)logEntries.size() * 20 - 4;
+        DrawRectangleRounded({ 14.0f, (float)boxY, maxTextW + 20.0f, (float)totalH }, 0.15f, 4, Fade(Color{ 14, 18, 24, 255 }, 0.78f));
+        DrawRectangleRoundedLinesEx({ 14.0f, (float)boxY, maxTextW + 20.0f, (float)totalH }, 0.15f, 4, 1.0f, Fade(GRAY, 0.35f));
 
-        int logY = boxY + 6;
+        int logY = boxY + 5;
         for (const auto& entry : logEntries) {
-            FontManager::DrawTextShadow(entry.text.c_str(), 18.0f, (float)logY, 14.0f, Fade(entry.color, 0.95f));
-            logY += 22;
+            FontManager::DrawTextShadow(entry.text.c_str(), 20.0f, (float)logY, 13.0f, Fade(entry.color, 0.95f));
+            logY += 20;
         }
     }
 

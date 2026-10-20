@@ -99,8 +99,7 @@ int main() {
             }
         } 
         else if (currentState == AppState::PLAYING) {
-            // ESC: Pause umschalten (oder Menü / Skilltree schließen)
-            // Regel: Ist der Skilltree oder das TAB-Menü offen, schließt ESC zuerst das Overlay.
+            // ESC: Pause umschalten (oder Menü / Skilltree / Inspektor / Werkzeug schließen)
             if (IsKeyPressed(KEY_ESCAPE)) {
                 if (sim.IsSkillTreeOpen()) {
                     sim.SetSkillTreeOpen(false);
@@ -111,6 +110,13 @@ int main() {
                     sim.SetPaused(isPaused);
                     ignoreMouseUntilRelease = true;
                     sim.CancelActiveInput();
+                } else if (sim.GetCurrentAction() != SelectedAction::NONE) {
+                    sim.SetCurrentAction(SelectedAction::NONE);
+                    ignoreMouseUntilRelease = true;
+                    sim.CancelActiveInput();
+                } else if (sim.SelectedCavemanId() != -1) {
+                    sim.DeselectCaveman();
+                    ignoreMouseUntilRelease = true;
                 } else {
                     isPaused = !isPaused; // Pause an/aus
                     sim.SetPaused(isPaused);
@@ -186,7 +192,7 @@ int main() {
                 // Klick auf den "[X Abwählen]"-Button unten links neben der Werkzeuganzeige prüfen
                 if (!ignoreMouseUntilRelease && sim.GetCurrentAction() != SelectedAction::NONE &&
                     IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                    Rectangle btnDeselect = { 430.0f, (float)SCREEN_HEIGHT - 38.0f, 115.0f, 28.0f };
+                    Rectangle btnDeselect = { 14.0f + 250.0f, (float)SCREEN_HEIGHT - 36.0f, 105.0f, 26.0f };
                     if (CheckCollisionPointRec(mousePos, btnDeselect)) {
                         sim.SetCurrentAction(SelectedAction::NONE);
                         ignoreMouseUntilRelease = true;
@@ -231,33 +237,38 @@ int main() {
                 sim.DrawUI();
 
                 // Statusanzeige für das aktuell gewählte Werkzeug (unten links)
-                const char* actionName = "Cursor (Beobachten)";
                 SelectedAction act = sim.GetCurrentAction();
-                if (act == SelectedAction::TERRAIN_GRASS)   actionName = "Gras malen";
-                if (act == SelectedAction::TERRAIN_WATER)   actionName = "Wasser malen";
-                if (act == SelectedAction::TERRAIN_FOREST)  actionName = "Wald pflanzen";
-                if (act == SelectedAction::SPAWN_MAN || act == SelectedAction::SPAWN_HUNTER) actionName = "Mann erschaffen (♂)";
-                if (act == SelectedAction::SPAWN_WOMAN)     actionName = "Frau erschaffen (♀)";
-                if (act == SelectedAction::SPAWN_ANIMAL)    actionName = "Wildtier spawnen";
-                if (act == SelectedAction::IGNITE_FIRE)     actionName = "Feuer legen (Lauffeuer)";
-                if (act == SelectedAction::GRAVITY_ANOMALY) actionName = "Antigravitation (Zero-G)";
-
-                const char* actionLabel = (act == SelectedAction::NONE)
-                    ? TextFormat("Modus: %s  |  [TAB]: Werkzeuge  |  [U]: Wetter", actionName)
-                    : TextFormat("Werkzeug: %s  |  [Rechtsklick/Q]: Cursor", actionName);
-                float labelW = std::max(430.0f, FontManager::MeasureText(actionLabel, 15.0f) + 24.0f);
-                DrawRectangle(14, SCREEN_HEIGHT - 40, (int)labelW, 30, Fade(BLACK, 0.82f));
-                DrawRectangleLines(14, SCREEN_HEIGHT - 40, (int)labelW, 30, Fade(act == SelectedAction::NONE ? SKYBLUE : GOLD, 0.75f));
-                FontManager::DrawTextShadow(actionLabel, 24.0f, (float)(SCREEN_HEIGHT - 34), 15.0f, act == SelectedAction::NONE ? SKYBLUE : GOLD);
-
-                // Direkt anklickbarer "[X Abwählen]"-Button, sobald ein Werkzeug aktiv ist
                 if (act != SelectedAction::NONE) {
-                    Rectangle btnDeselect = { labelW + 24.0f, (float)SCREEN_HEIGHT - 40.0f, 130.0f, 30.0f };
+                    const char* actionName = "";
+                    if (act == SelectedAction::TERRAIN_GRASS)   actionName = "Gras malen";
+                    if (act == SelectedAction::TERRAIN_WATER)   actionName = "Wasser malen";
+                    if (act == SelectedAction::TERRAIN_FOREST)  actionName = "Wald pflanzen";
+                    if (act == SelectedAction::SPAWN_MAN || act == SelectedAction::SPAWN_HUNTER) actionName = "Mann erschaffen (♂)";
+                    if (act == SelectedAction::SPAWN_WOMAN)     actionName = "Frau erschaffen (♀)";
+                    if (act == SelectedAction::SPAWN_ANIMAL)    actionName = "Wildtier spawnen";
+                    if (act == SelectedAction::IGNITE_FIRE)     actionName = "Feuer legen";
+                    if (act == SelectedAction::GRAVITY_ANOMALY) actionName = "Antigravitation";
+
+                    std::string actionLabel = TextFormat("Werkzeug: %s", actionName);
+                    Rectangle boxR = { 14.0f, (float)SCREEN_HEIGHT - 36.0f, 240.0f, 26.0f };
+                    DrawRectangleRounded(boxR, 0.35f, 4, Fade(Color{ 18, 22, 28, 255 }, 0.90f));
+                    DrawRectangleRoundedLinesEx(boxR, 0.35f, 4, 1.2f, GOLD);
+                    FontManager::DrawTextShadow(actionLabel.c_str(), 24.0f, (float)(SCREEN_HEIGHT - 31), 14.0f, GOLD);
+
+                    // Direkt anklickbarer "[X Abwählen]"-Button
+                    Rectangle btnDeselect = { 14.0f + 250.0f, (float)SCREEN_HEIGHT - 36.0f, 105.0f, 26.0f };
                     bool hovDesel = CheckCollisionPointRec(mousePos, btnDeselect);
-                    DrawRectangleRec(btnDeselect, hovDesel ? Color{ 175, 50, 50, 245 } : Color{ 125, 35, 35, 230 });
-                    DrawRectangleLinesEx(btnDeselect, 1.2f, RAYWHITE);
+                    DrawRectangleRounded(btnDeselect, 0.35f, 4, hovDesel ? Color{ 175, 50, 50, 245 } : Color{ 120, 35, 35, 225 });
+                    DrawRectangleRoundedLinesEx(btnDeselect, 0.35f, 4, 1.2f, RAYWHITE);
                     FontManager::DrawTextCenteredShadow("[X] Abwählen", btnDeselect.x + btnDeselect.width * 0.5f,
-                                                        btnDeselect.y + 6.0f, 15.0f, RAYWHITE);
+                                                        btnDeselect.y + 5.0f, 13.0f, RAYWHITE);
+                } else {
+                    // Dezenter Steuerungs-Hinweis (unaufdringlich, halbtransparent)
+                    const char* hint = "[TAB] Werkzeuge  |  [U] Wetter  |  [K] Skilltree  |  [T] Territorien";
+                    float tw = FontManager::MeasureText(hint, 12.0f);
+                    Rectangle hintR = { 14.0f, (float)SCREEN_HEIGHT - 28.0f, tw + 20.0f, 20.0f };
+                    DrawRectangleRounded(hintR, 0.4f, 4, Fade(BLACK, 0.55f));
+                    FontManager::DrawTextShadow(hint, 24.0f, (float)(SCREEN_HEIGHT - 24), 12.0f, Fade(LIGHTGRAY, 0.85f));
                 }
 
                 // --- 3. PAUSE-OVERLAY (wenn ESC aktiv ist) ---

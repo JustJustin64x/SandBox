@@ -58,6 +58,9 @@ public:
     void RegenerateWorld(uint32_t seed = 0);
     const EnvironmentalSystem& Env() const { return env_; }
 
+    int SelectedCavemanId() const { return selectedCavemanId_; }
+    void DeselectCaveman() { selectedCavemanId_ = -1; }
+
     // Bricht aktives Zeichnen ab (z.B. wenn ein Menü geöffnet oder geschlossen wird)
     void CancelActiveInput() { isPainting_ = false; }
 
