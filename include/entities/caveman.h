@@ -4,6 +4,7 @@
 #include "common.h"
 #include "resource_node.h"
 #include "personality.h"
+#include "ai/brain_genome.h"
 
 #include <string>
 #include <vector>
@@ -136,7 +137,7 @@ public:
     Caveman(int id, std::string name, Role role, Vector2 position, Gender gender = Gender::Male);
 
     void Update(WorldContext& ctx, float dt);
-    void Draw(const SpriteSheet& sheet, bool highlighted, float visualYOffset = 0.0f) const;
+    void Draw(const SpriteSheet& sheet, bool highlighted, float visualYOffset = 0.0f, bool isDark = false) const;
     void DrawDebugPath() const;
     void TakeDamage(float amount, const char* cause, WorldContext& ctx);
     void TakeDamageNonLethal(float amount);
@@ -154,6 +155,7 @@ public:
     bool IsDead() const            { return state_ == CavemanState::Dead; }
     bool IsAlive() const           { return state_ != CavemanState::Dead; }
     Vector2 Position() const       { return position_; }
+    void SetPosition(Vector2 p)    { position_ = p; }
     Vector2 TargetPosition() const { return targetPosition_; }
     float Hp() const               { return hp_; }
     float Ap() const               { return ap_; }
@@ -187,6 +189,14 @@ public:
     EpisodicMemory& Memory()                  { return memory_; }
     const EpisodicMemory& Memory() const      { return memory_; }
 
+    // --- Evolutionäres Gehirn-Genom & Reinforcement Learning --------------------
+    const BrainGenome& GetBrainGenome() const { return genome_; }
+    BrainGenome& GetBrainGenomeMutable()      { return genome_; }
+    void SetBrainGenome(const BrainGenome& bg) { genome_ = bg; brain_.InitFromGenome(bg); }
+    const BrainWeights& GetBrainWeights() const { return brain_; }
+    BrainWeights& GetBrainWeightsMutable()    { return brain_; }
+    void EvaluateActionOutcomeAndReward(WorldContext& ctx);
+
     void ResetSocialNeed()                    { socialNeed_ = 0.0f; }
     void Feed(float amount)                   { hunger_ = std::max(0.0f, hunger_ - amount); }
     void SetTargetSocialPartner(int targetId) { targetSocialPartner_ = targetId; }
@@ -210,6 +220,10 @@ public:
     std::string GetSocialSummary(const Tribe& tribe) const;
     bool SetDestinationDirect(const class World& world, Vector2 target, bool ignoreTerritory = true);
 
+    bool IsTaskDone() const { return taskDone_; }
+    float GetTaskCommitmentTimer() const { return taskCommitmentTimer_; }
+    bool IsTargetBlacklisted(int targetId) const;
+    void BlacklistTarget(int targetId, float duration = 15.0f);
     bool IsNodeBlacklisted(int nodeId) const;
     void BlacklistNode(int nodeId, float duration = 15.0f);
 
@@ -227,6 +241,7 @@ private:
                     int targetNodeId, int targetCharacterId, int targetPoiId, WorldContext& ctx);
     void ExitState(WorldContext& ctx);
     void Die(WorldContext& ctx);
+    void Die(DeathCause cause, WorldContext& ctx, const char* killerName = "");
     void FinishTask() { taskDone_ = true; }
 
     // --- Zustands-Handler -------------------------------------------------------
@@ -258,7 +273,7 @@ private:
     void DegradeToolDurability(float amount, WorldContext& ctx);
     Vector2 PersonalOffset(float radius) const;
     void DrawFloatingEmote(Vector2 drawPos) const;
-    void DrawClothingAndGear(Vector2 drawPos) const;
+    void DrawClothingAndGear(Vector2 drawPos, bool isDark = false) const;
 
     // --- Identität & Demografie -----------------------------------------------
     int id_;
@@ -295,6 +310,15 @@ private:
     // --- Psychologie & Gedächtnis -----------------------------------------------
     Personality personality_;
     EpisodicMemory memory_;
+
+    // --- Evolutionäres Gehirn-Genom & Reinforcement Learning --------------------
+    BrainGenome genome_;
+    BrainWeights brain_;
+    CavemanState taskStartState_ = CavemanState::Idle;
+    float taskStartHp_ = 100.0f;
+    float taskStartHunger_ = 0.0f;
+    float taskStartWarmth_ = 100.0f;
+    float taskStartTiredness_ = 0.0f;
 
     // --- Visuelles Feedback ("Show, Don't Tell") & Fraktion ---------------------
     SocialEmote activeEmote_ = SocialEmote::None;
@@ -347,9 +371,10 @@ private:
     float drownDamageTimer_ = 0.0f;
     float envDamageTimer_ = 0.0f;
 
-    // --- KI-Task-Commitment & Blacklisting unpassierbarer Resourcen ----------------
+    // --- KI-Task-Commitment & Blacklisting unpassierbarer Resourcen & Baustellen ---
     float taskCommitmentTimer_ = 0.0f;
     std::unordered_map<int, float> blacklistedNodes_;
+    std::unordered_map<int, float> blacklistedTargets_;
 };
 
 #endif // CAVEMAN_H

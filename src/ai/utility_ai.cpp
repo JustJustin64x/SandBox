@@ -22,164 +22,316 @@ float UtilityAI::DistanceFactor(Vector2 from, Vector2 to, float maxRange) {
     return 1.0f - (dist / maxRange) * 0.8f;
 }
 
+bool UtilityAI::CanPerformAction(const Caveman& agent, CavemanState state, const WorldContext& ctx, int targetId) {
+    // 0. Kinder (Role::Child oder Alter < 16) dürfen unter keinen Umständen arbeiten, bauen, forschen, jagen oder kämpfen!
+    if (agent.GetRole() == Role::Child || agent.AgeYears() < 16.0f) {
+        if (state == CavemanState::Building || state == CavemanState::Crafting ||
+            state == CavemanState::Hunting || state == CavemanState::GatheringFood ||
+            state == CavemanState::GatheringMaterials || state == CavemanState::Expedition ||
+            state == CavemanState::BorderRaid) {
+            return false;
+        }
+    }
+
+    // 1. Harte Überlebens-Sperre: Wer verhungert (>= 75%), erfriert (<= 20%) oder lebensgefährlich verletzt ist (<= 35 HP),
+    // darf KEINE nicht-überlebenswichtigen Arbeiten (Bauen, Craften, Expedition, Wandern, Raiden, Materialien sammeln) ausführen!
+    bool criticalSurvival = (agent.Hunger() >= 75.0f || agent.Warmth() <= 20.0f || agent.Hp() <= 35.0f);
+    if (criticalSurvival) {
+        if (state == CavemanState::Building || state == CavemanState::Crafting ||
+            state == CavemanState::Expedition || state == CavemanState::Wandering ||
+            state == CavemanState::BorderRaid || state == CavemanState::GatheringMaterials) {
+            return false;
+        }
+    }
+
+    // 2. Ziel-Sperre durch Cooldown/Blacklist
+    if (targetId >= 0 && (agent.IsTargetBlacklisted(targetId) || agent.IsNodeBlacklisted(targetId))) {
+        return false;
+    }
+
+    // 3. Zustandsspezifische Vorbedingungen
+    switch (state) {
+        case CavemanState::Building: {
+            if (agent.GetRole() == Role::Child) return false;
+            int bId = (targetId >= 0) ? targetId : ctx.tribe.Buildings().FindActiveConstructionSite(agent.Position());
+            if (bId < 0 || agent.IsTargetBlacklisted(bId)) return false;
+            const Building* b = ctx.tribe.Buildings().Get(bId);
+            if (!b || !b->NeedsWork()) return false;
+            if (b->builders >= b->maxBuilders) return false;
+
+            // Material-Verfügbarkeit prüfen: Bei Neubau oder Upgrade muss mindestens 1 Einheit des benötigten Materials
+            // vorhanden sein oder der Baufortschritt ist bereits im Gang (> 0%)
+            bool isRepair = (b->finished && !b->underUpgrade && b->hp < b->maxHp - 8.0f);
+            if (!isRepair) {
+                ResourceCost cost = b->underUpgrade ? b->GetUpgradeCost() : b->GetBuildCost();
+                const Stockpile& stock = ctx.tribe.Stock();
+                int neededTypes = (cost.wood > 0 ? 1 : 0) + (cost.stone > 0 ? 1 : 0) +
+                                  (cost.planks > 0 ? 1 : 0) + (cost.bricks > 0 ? 1 : 0);
+                int availableTypes = ((cost.wood > 0 && stock.wood > 0) ? 1 : 0) +
+                                     ((cost.stone > 0 && stock.stone > 0) ? 1 : 0) +
+                                     ((cost.planks > 0 && stock.planks > 0) ? 1 : 0) +
+                                     ((cost.bricks > 0 && stock.bricks > 0) ? 1 : 0);
+                if (neededTypes > 0 && availableTypes == 0 && b->progress < 1.0f) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        case CavemanState::Crafting: {
+            if (agent.GetRole() == Role::Child) return false;
+            int benchId = (targetId >= 0) ? targetId : ctx.tribe.Buildings().FindCraftBench(agent.Position());
+            if (benchId < 0 || agent.IsTargetBlacklisted(benchId)) return false;
+            const Building* b = ctx.tribe.Buildings().Get(benchId);
+            if (!b || !b->finished) return false;
+            return true;
+        }
+
+        case CavemanState::Expedition: {
+            if (agent.GetRole() == Role::Child) return false;
+            if (agent.Hp() < 45.0f || agent.Hunger() > 60.0f || agent.Warmth() < 35.0f || agent.Tiredness() > 65.0f) {
+                return false;
+            }
+            if (targetId >= 0 && agent.IsTargetBlacklisted(targetId)) return false;
+            return true;
+        }
+
+        case CavemanState::Hunting: {
+            if (agent.GetRole() == Role::Child) return false;
+            const RoleTraits& traits = GetRoleTraits(agent.GetRole());
+            if (!traits.canHunt) return false;
+            if (targetId >= 0 && (agent.IsTargetBlacklisted(targetId) || agent.IsNodeBlacklisted(targetId))) return false;
+            return true;
+        }
+
+        case CavemanState::GatheringFood: {
+            if (agent.GetRole() == Role::Child) return false;
+            if (targetId >= 0 && (agent.IsTargetBlacklisted(targetId) || agent.IsNodeBlacklisted(targetId))) return false;
+            return true;
+        }
+
+        case CavemanState::GatheringMaterials: {
+            if (agent.GetRole() == Role::Child) return false;
+            if (targetId >= 0 && (agent.IsTargetBlacklisted(targetId) || agent.IsNodeBlacklisted(targetId))) return false;
+            return true;
+        }
+
+        case CavemanState::Sleeping: {
+            bool isNight = (ctx.timeOfDay > 0.72f || ctx.timeOfDay < 0.22f);
+            if (isNight) {
+                if (agent.Tiredness() < 45.0f) return false;
+            } else {
+                if (agent.Tiredness() < 70.0f) return false;
+            }
+            return true;
+        }
+
+        case CavemanState::Eating: {
+            const Stockpile& stock = ctx.tribe.Stock();
+            if (stock.food <= 0 && stock.cookedFood <= 0) return false;
+            if (agent.Hunger() < 25.0f) return false;
+            return true;
+        }
+
+        case CavemanState::BorderRaid: {
+            if (agent.GetRole() == Role::Child) return false;
+            if (agent.Hp() < 50.0f) return false;
+            return true;
+        }
+
+        default:
+            break;
+    }
+
+    return true;
+}
+
 UtilityDecision UtilityAI::Evaluate(const Caveman& agent, const WorldContext& ctx) {
     UtilityDecision best;
     best.state = CavemanState::Idle;
     best.score = -1.0f;
+    bool isChild = (agent.GetRole() == Role::Child || agent.AgeYears() < 16.0f);
+    const BrainWeights& brain = agent.GetBrainWeights();
 
-    // 0. Panik / Flucht vor Feuer & Strom (höchste Überlebenspriorität)
+    // 0. Panik / Flucht vor Feuer & Strom (höchste Überlebenspriorität, moduliert durch Raubtier-/Gefahrenvorsicht)
     {
         std::string reason;
         float score = ScoreFlee(agent, ctx, reason);
-        if (score > best.score) {
-            best = { CavemanState::Fleeing, ResourceType::Bush, -1, -1, -1, score, reason };
+        if (score > 0.0f) {
+            score *= (0.75f + brain.Get(BrainGene::PredatorCaution) * 0.30f);
+            if (score > best.score) {
+                best = { CavemanState::Fleeing, ResourceType::Bush, -1, -1, -1, score, reason };
+            }
         }
     }
 
-    // 1. Essen
-    {
+    // 1. Essen (Moduliert durch genetische & erlernte Nahrungsvorsicht)
+    if (CanPerformAction(agent, CavemanState::Eating, ctx)) {
         std::string reason;
         float score = ScoreEat(agent, ctx, reason);
+        score *= brain.Get(BrainGene::FoodCaution);
         if (score > best.score) {
             best = { CavemanState::Eating, ResourceType::Bush, -1, -1, -1, score, reason };
         }
     }
 
-    // 2. Schlafen
-    {
+    // 2. Schlafen (Harte Schranke: tagsüber nur ab Müdigkeit >= 70%, nachts ab >= 45%)
+    if (CanPerformAction(agent, CavemanState::Sleeping, ctx)) {
         int hutId = -1;
         std::string reason;
         float score = ScoreSleep(agent, ctx, hutId, reason);
+        score *= brain.Get(BrainGene::SleepRest);
         if (score > best.score) {
             best = { CavemanState::Sleeping, ResourceType::Bush, hutId, -1, -1, score, reason };
         }
     }
 
-    // 3. Aufwärmen / Schutz bei Sturm & Kälte
-    {
+    // 3. Aufwärmen / Schutz bei Sturm & Kälte (Moduliert durch Wärmepriorität)
+    if (CanPerformAction(agent, CavemanState::WarmingUp, ctx)) {
         int shelterId = -1;
         std::string reason;
         float score = ScoreWarmUp(agent, ctx, shelterId, reason);
+        score *= brain.Get(BrainGene::WarmthPriority);
         if (score > best.score) {
             best = { CavemanState::WarmingUp, ResourceType::Bush, shelterId, -1, -1, score, reason };
         }
     }
 
-    // 4. Soziales Handeln (Gespräch, Klatsch, Flirten, Teilen)
+    // 4. Soziales Handeln (Gespräch, Klatsch, Flirten, Teilen, Kinderfürsorge/Lehre)
     {
         int targetCharId = -1;
         std::string reason;
         float score = ScoreSocial(agent, ctx, targetCharId, reason);
+        score *= brain.Get(BrainGene::Social);
         if (score > best.score && targetCharId >= 0) {
             best = { CavemanState::Socializing, ResourceType::Bush, -1, -1, targetCharId, score, reason };
         }
     }
 
-    // 5. Forschung & Expedition (POIs erkunden mit Ausrüstung)
-    {
-        int poiId = -1;
-        std::string reason;
-        float score = ScoreExpedition(agent, ctx, poiId, reason);
-        if (score > best.score && poiId >= 0) {
-            best = { CavemanState::Expedition, ResourceType::Bush, -1, -1, -1, score, reason, poiId };
+    // Arbeits-, Bau-, Jagd- und Expeditions-Aktionen sind für Kinder STRIKT verboten!
+    if (!isChild) {
+        // 5. Forschung & Expedition (POIs erkunden mit Ausrüstung)
+        if (CanPerformAction(agent, CavemanState::Expedition, ctx)) {
+            int poiId = -1;
+            std::string reason;
+            float score = ScoreExpedition(agent, ctx, poiId, reason);
+            score *= brain.Get(BrainGene::Expedition);
+            if (score > best.score && poiId >= 0) {
+                best = { CavemanState::Expedition, ResourceType::Bush, -1, -1, -1, score, reason, poiId };
+            }
         }
-    }
 
-    // 6. Bauen / Reparieren
-    {
-        int buildingId = -1;
-        std::string reason;
-        float score = ScoreBuild(agent, ctx, buildingId, reason);
-        if (score > best.score && buildingId >= 0) {
-            best = { CavemanState::Building, ResourceType::Tree, buildingId, -1, -1, score, reason };
+        // 6. Bauen / Reparieren (Moduliert durch Bautrieb)
+        if (CanPerformAction(agent, CavemanState::Building, ctx)) {
+            int buildingId = -1;
+            std::string reason;
+            float score = ScoreBuild(agent, ctx, buildingId, reason);
+            score *= brain.Get(BrainGene::Build);
+            if (score > best.score && buildingId >= 0) {
+                best = { CavemanState::Building, ResourceType::Tree, buildingId, -1, -1, score, reason };
+            }
         }
-    }
 
-    // 6. Veredeln an der Werkbank
-    {
-        int benchId = -1;
-        std::string reason;
-        float score = ScoreCraft(agent, ctx, benchId, reason);
-        if (score > best.score && benchId >= 0) {
-            best = { CavemanState::Crafting, ResourceType::Tree, benchId, -1, -1, score, reason };
+        // 6b. Veredeln an der Werkbank (Moduliert durch Handwerkstrieb)
+        if (CanPerformAction(agent, CavemanState::Crafting, ctx)) {
+            int benchId = -1;
+            std::string reason;
+            float score = ScoreCraft(agent, ctx, benchId, reason);
+            score *= brain.Get(BrainGene::Craft);
+            if (score > best.score && benchId >= 0) {
+                best = { CavemanState::Crafting, ResourceType::Tree, benchId, -1, -1, score, reason };
+            }
         }
-    }
 
-    // 7. Jagd (Wildtiere)
-    {
-        int nodeId = -1;
-        std::string reason;
-        float score = ScoreHunt(agent, ctx, nodeId, reason);
-        if (score > best.score && nodeId >= 0) {
-            best = { CavemanState::Hunting, ResourceType::Animal, -1, nodeId, -1, score, reason };
+        // 7. Jagd (Wildtiere, moduliert durch Jagdlust & Raubtiervorsicht)
+        if (CanPerformAction(agent, CavemanState::Hunting, ctx)) {
+            int nodeId = -1;
+            std::string reason;
+            float score = ScoreHunt(agent, ctx, nodeId, reason);
+            score *= brain.Get(BrainGene::Hunt);
+            if (score > best.score && nodeId >= 0) {
+                best = { CavemanState::Hunting, ResourceType::Animal, -1, nodeId, -1, score, reason };
+            }
         }
-    }
 
-    // 8a. Neolithische Landwirtschaft & Tierzucht (Ackerfeld & Tiergehege bestellen/ernten)
-    {
-        int farmId = ctx.tribe.Buildings().FindFarmOrPenNeedingWork(agent.Position());
-        if (farmId >= 0 && agent.GetRole() != Role::Child) {
-            if (const Building* b = ctx.tribe.Buildings().Get(farmId)) {
-                float roleAff = (agent.GetRole() == Role::Gatherer || agent.GetRole() == Role::Elder) ? 1.25f : 0.90f;
-                float dist = DistanceFactor(agent.Position(), b->position);
-                float basePrio = b->IsHarvestReady() ? 0.86f : 0.68f;
-                float farmScore = std::clamp(basePrio * roleAff * dist, 0.0f, 0.93f);
-                if (farmScore > best.score) {
-                    std::string farmReason = (b->type == BuildingType::FarmPlot)
-                        ? (b->IsHarvestReady() ? "Getreide ernten" : "Ackerfeld bestellen")
-                        : (b->IsHarvestReady() ? "Tiergehege versorgen & scheren" : "Herde füttern");
-                    best = { CavemanState::GatheringFood, ResourceType::Bush, farmId, -1, -1, farmScore, farmReason };
+        // 8a. Neolithische Landwirtschaft & Tierzucht (Ackerfeld & Tiergehege bestellen/ernten)
+        if (CanPerformAction(agent, CavemanState::GatheringFood, ctx)) {
+            int farmId = ctx.tribe.Buildings().FindFarmOrPenNeedingWork(agent.Position());
+            if (farmId >= 0) {
+                if (const Building* b = ctx.tribe.Buildings().Get(farmId)) {
+                    float roleAff = (agent.GetRole() == Role::Gatherer || agent.GetRole() == Role::Elder) ? 1.25f : 0.90f;
+                    float dist = DistanceFactor(agent.Position(), b->position);
+                    float basePrio = b->IsHarvestReady() ? 0.86f : 0.68f;
+                    float farmScore = std::clamp(basePrio * roleAff * dist, 0.0f, 0.93f);
+                    farmScore *= brain.Get(BrainGene::GatherFood);
+                    if (farmScore > best.score) {
+                        std::string farmReason = (b->type == BuildingType::FarmPlot)
+                            ? (b->IsHarvestReady() ? "Getreide ernten" : "Ackerfeld bestellen")
+                            : (b->IsHarvestReady() ? "Tiergehege versorgen & scheren" : "Herde füttern");
+                        best = { CavemanState::GatheringFood, ResourceType::Bush, farmId, -1, -1, farmScore, farmReason };
+                    }
                 }
+            }
+        }
+
+        // 8b. Nahrung sammeln (Wildbeeren)
+        if (CanPerformAction(agent, CavemanState::GatheringFood, ctx)) {
+            int nodeId = -1;
+            std::string reason;
+            float score = ScoreGatherFood(agent, ctx, nodeId, reason);
+            score *= brain.Get(BrainGene::GatherFood);
+            if (score > best.score && nodeId >= 0) {
+                best = { CavemanState::GatheringFood, ResourceType::Bush, -1, nodeId, -1, score, reason };
+            }
+        }
+
+        // 9. Holz beschaffen
+        if (CanPerformAction(agent, CavemanState::GatheringMaterials, ctx)) {
+            int nodeId = -1;
+            std::string reason;
+            float score = ScoreGatherWood(agent, ctx, nodeId, reason);
+            score *= brain.Get(BrainGene::GatherWood);
+            if (score > best.score && nodeId >= 0) {
+                best = { CavemanState::GatheringMaterials, ResourceType::Tree, -1, nodeId, -1, score, reason };
+            }
+        }
+
+        // 10. Stein beschaffen
+        if (CanPerformAction(agent, CavemanState::GatheringMaterials, ctx)) {
+            int nodeId = -1;
+            std::string reason;
+            float score = ScoreGatherStone(agent, ctx, nodeId, reason);
+            score *= brain.Get(BrainGene::GatherStone);
+            if (score > best.score && nodeId >= 0) {
+                best = { CavemanState::GatheringMaterials, ResourceType::Rock, -1, nodeId, -1, score, reason };
+            }
+        }
+
+        // 11. Grenzkampf, Grenzpatrouille & Kachel-Eroberung (Phase 4: Border Raid)
+        if (CanPerformAction(agent, CavemanState::BorderRaid, ctx)) {
+            int tileX = -1, tileY = -1;
+            std::string reason;
+            float score = ScoreBorderRaid(agent, ctx, tileX, tileY, reason);
+            score *= brain.Get(BrainGene::BorderRaid);
+            if (score > best.score && tileX >= 0) {
+                best = { CavemanState::BorderRaid, ResourceType::Bush, -1, tileX, tileY, score, reason };
             }
         }
     }
 
-    // 8b. Nahrung sammeln (Wildbeeren)
-    {
-        int nodeId = -1;
-        std::string reason;
-        float score = ScoreGatherFood(agent, ctx, nodeId, reason);
-        if (score > best.score && nodeId >= 0) {
-            best = { CavemanState::GatheringFood, ResourceType::Bush, -1, nodeId, -1, score, reason };
-        }
-    }
-
-    // 9. Holz beschaffen
-    {
-        int nodeId = -1;
-        std::string reason;
-        float score = ScoreGatherWood(agent, ctx, nodeId, reason);
-        if (score > best.score && nodeId >= 0) {
-            best = { CavemanState::GatheringMaterials, ResourceType::Tree, -1, nodeId, -1, score, reason };
-        }
-    }
-
-    // 10. Stein beschaffen
-    {
-        int nodeId = -1;
-        std::string reason;
-        float score = ScoreGatherStone(agent, ctx, nodeId, reason);
-        if (score > best.score && nodeId >= 0) {
-            best = { CavemanState::GatheringMaterials, ResourceType::Rock, -1, nodeId, -1, score, reason };
-        }
-    }
-
-    // 11. Grenzkampf, Grenzpatrouille & Kachel-Eroberung (Phase 4: Border Raid)
-    {
-        int tileX = -1, tileY = -1;
-        std::string reason;
-        float score = ScoreBorderRaid(agent, ctx, tileX, tileY, reason);
-        if (score > best.score && tileX >= 0) {
-            best = { CavemanState::BorderRaid, ResourceType::Bush, -1, tileX, tileY, score, reason };
-        }
-    }
-
     // 12. Wandern / Verweilen (Fallback)
-    {
+    if (CanPerformAction(agent, CavemanState::Wandering, ctx)) {
         std::string reason;
         float score = ScoreWander(agent, ctx, reason);
         if (score > best.score) {
             best = { CavemanState::Wandering, ResourceType::Bush, -1, -1, -1, score, reason };
+        }
+    }
+
+    // Task-Commitment Hysterese-Bonus (+0.20f) für die aktuell laufende valide Aktion
+    if (!agent.IsTaskDone() && agent.GetTaskCommitmentTimer() > 0.0f && agent.State() != CavemanState::Idle) {
+        if (best.state == agent.State()) {
+            best.score += 0.20f;
         }
     }
 
@@ -233,9 +385,9 @@ float UtilityAI::ScoreSleep(const Caveman& agent, const WorldContext& ctx, int& 
 
     bool isNight = (ctx.timeOfDay > 0.72f || ctx.timeOfDay < 0.22f);
     if (isNight) {
-        if (tiredness < 45.0f && ap >= 25.0f) return 0.0f;
+        if (tiredness < 45.0f) return 0.0f;
     } else {
-        if (tiredness < 70.0f && ap >= 15.0f) return 0.0f;
+        if (tiredness < 70.0f) return 0.0f;
     }
 
     float tirednessNorm = tiredness / 100.0f;
@@ -383,10 +535,11 @@ float UtilityAI::ScoreGatherFood(const Caveman& agent, const WorldContext& ctx, 
     const Stockpile& stock = ctx.tribe.Stock();
     int totalFood = stock.food + stock.cookedFood;
 
-    // Rollen-Disziplin: Jäger pflücken KEINE Beeren, solange Vorräte oder Wildtiere existieren!
+    // Rollen-Disziplin: Jäger pflücken KEINE Beeren, solange Vorräte oder Wildtiere existieren,
+    // AUSSER bei akutem Hunger (>= 60%), wenn keine Tiere verfügbar sind!
     if (agent.GetRole() == Role::Hunter) {
         int availAnimals = ctx.resources.CountAvailable(ResourceType::Animal);
-        if (totalFood > 0 || availAnimals > 0) {
+        if (agent.Hunger() < 60.0f && (totalFood > 0 || availAnimals > 0)) {
             return 0.0f;
         }
     }
@@ -405,7 +558,7 @@ float UtilityAI::ScoreGatherFood(const Caveman& agent, const WorldContext& ctx, 
 
     float personalNeed = agent.Hunger() / 100.0f;
     float roleAffinity = (agent.GetRole() == Role::Gatherer) ? 1.4f :
-                         (agent.GetRole() == Role::Hunter) ? 0.7f : 1.0f;
+                         (agent.GetRole() == Role::Hunter) ? 0.85f : 1.0f;
 
     if (agent.Hunger() >= 55.0f || totalFood == 0) {
         roleAffinity = std::max(roleAffinity, 1.4f);
@@ -415,7 +568,18 @@ float UtilityAI::ScoreGatherFood(const Caveman& agent, const WorldContext& ctx, 
     float dist = DistanceFactor(agent.Position(), node->position);
     float score = std::clamp((colonyNeed * 0.5f + personalNeed * 0.65f) * roleAffinity * dist, 0.0f, 1.6f);
 
-    outReason = TextFormat("Beeren pflücken (Vorrat: %d, Hunger: %.0f%%)", totalFood, agent.Hunger());
+    // Überlebens-Notbremse: Sobald Hunger >= 60 oder Stammes-Nahrung < pop * 2
+    if (agent.Hunger() >= 60.0f || totalFood < ctx.population * 2) {
+        float hungerFactor = std::pow(agent.Hunger() / 100.0f, 1.5f);
+        float scarcity = (totalFood < ctx.population * 2)
+            ? (float)(ctx.population * 2 - totalFood) / (float)std::max(1, ctx.population * 2) : 0.0f;
+        float emergencyBoost = 0.85f + hungerFactor * 0.45f + scarcity * 0.30f;
+        score = std::max(score, std::clamp(emergencyBoost * dist, 0.85f, 1.6f));
+    }
+
+    outReason = (agent.Hunger() >= 60.0f)
+        ? TextFormat("Hunger kritisch (%.0f%%)", agent.Hunger())
+        : TextFormat("Beeren pflücken (Vorrat: %d)", totalFood);
     return score;
 }
 
@@ -444,7 +608,25 @@ float UtilityAI::ScoreHunt(const Caveman& agent, const WorldContext& ctx, int& o
     float dist = DistanceFactor(agent.Position(), node->position);
 
     float score = std::clamp(colonyNeed * 1.1f * roleAffinity * dist, 0.0f, 1.4f);
-    outReason = TextFormat("Sucht Wildtiere (Fleisch & Vorrat: %d)", totalFood);
+
+    // Kognitive Raubtier-Furcht: Geschwächte Jäger meiden Angriffe auf Wildtiere
+    if (agent.Hp() < 65.0f) {
+        float caution = agent.GetBrainWeights().Get(BrainGene::PredatorCaution);
+        score /= (0.7f + caution * 0.6f);
+    }
+
+    // Überlebens-Notbremse: Sobald Hunger >= 60 oder Stammes-Nahrung < pop * 2
+    if (agent.Hunger() >= 60.0f || totalFood < ctx.population * 2) {
+        float hungerFactor = std::pow(agent.Hunger() / 100.0f, 1.5f);
+        float scarcity = (totalFood < ctx.population * 2)
+            ? (float)(ctx.population * 2 - totalFood) / (float)std::max(1, ctx.population * 2) : 0.0f;
+        float emergencyBoost = 0.85f + hungerFactor * 0.45f + scarcity * 0.30f;
+        score = std::max(score, std::clamp(emergencyBoost * dist, 0.85f, 1.6f));
+    }
+
+    outReason = (agent.Hunger() >= 60.0f)
+        ? TextFormat("Hunger kritisch (%.0f%%)", agent.Hunger())
+        : TextFormat("Sucht Wildtiere (Fleisch & Vorrat: %d)", totalFood);
     return score;
 }
 
@@ -520,7 +702,9 @@ float UtilityAI::ScoreBuild(const Caveman& agent, const WorldContext& ctx, int& 
     if (!traits.canBuild) return 0.0f;
 
     outBuildingId = ctx.tribe.Buildings().FindActiveConstructionSite(agent.Position());
-    if (outBuildingId < 0) return 0.0f;
+    if (outBuildingId < 0 || agent.IsTargetBlacklisted(outBuildingId)) return 0.0f;
+
+    if (!CanPerformAction(agent, CavemanState::Building, ctx, outBuildingId)) return 0.0f;
 
     const Building* b = ctx.tribe.Buildings().Get(outBuildingId);
     if (!b) return 0.0f;
@@ -618,7 +802,8 @@ float UtilityAI::ScoreExpedition(const Caveman& agent, const WorldContext& ctx, 
 
     // Passenden POI suchen (entweder fokussiert oder der nächste bereite)
     int bestPoiId = ctx.tribe.POIs().FindBestForExpedition(agent.Position(), ctx.tribe.Stock(), targetPoiId);
-    if (bestPoiId < 0) return 0.0f;
+    if (bestPoiId < 0 || agent.IsTargetBlacklisted(bestPoiId)) return 0.0f;
+    if (!CanPerformAction(agent, CavemanState::Expedition, ctx, bestPoiId)) return 0.0f;
 
     const auto* poi = ctx.tribe.POIs().Get(bestPoiId);
     if (!poi) return 0.0f;

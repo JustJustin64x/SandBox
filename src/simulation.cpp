@@ -1,6 +1,7 @@
 #include "simulation.h"
 #include "config.h"
 #include "font_manager.h"
+#include "ai/brain_genome.h"
 
 #include <algorithm>
 #include <cmath>
@@ -71,6 +72,14 @@ Tribe& Simulation::CurrentUiTribe() {
         }
     }
     int idx = std::clamp(activeTribeIndex_, 0, (int)tribes_.size() - 1);
+    if (tribes_[idx]->IsDisbanded()) {
+        for (size_t i = 0; i < tribes_.size(); ++i) {
+            if (!tribes_[i]->IsDisbanded()) {
+                activeTribeIndex_ = (int)i;
+                return *tribes_[i];
+            }
+        }
+    }
     return *tribes_[idx];
 }
 
@@ -84,6 +93,13 @@ const Tribe& Simulation::CurrentUiTribe() const {
         }
     }
     int idx = std::clamp(activeTribeIndex_, 0, (int)tribes_.size() - 1);
+    if (tribes_[idx]->IsDisbanded()) {
+        for (size_t i = 0; i < tribes_.size(); ++i) {
+            if (!tribes_[i]->IsDisbanded()) {
+                return *tribes_[i];
+            }
+        }
+    }
     return *tribes_[idx];
 }
 
@@ -148,6 +164,14 @@ void Simulation::SpawnChildFromParents(Caveman& parentA, Caveman& parentB, Vecto
     Gender childGender = (GetRandomValue(0, 1) == 0) ? Gender::Male : Gender::Female;
     cavemen_.emplace_back(id, RoleDefaultNames(Role::Child, id), Role::Child, spawnPos, childGender);
     cavemen_.back().SetPersonality(childPers);
+
+    // Evolutionäre Genetik: Crossover der Eltern-Genome mit Mutation (6% Rate, 12% Amplitude)
+    BrainGenome childGenome = BrainGenome::Crossover(parentA.GetBrainGenome(), parentB.GetBrainGenome(), 0.06f, 0.12f);
+    cavemen_.back().SetBrainGenome(childGenome);
+
+    // Kulturelle Weitergabe (Epigenetik & Starthilfe): 20% Prägung durch beide Eltern
+    cavemen_.back().GetBrainWeightsMutable().AssimilateCulture(parentA.GetBrainWeights(), 0.20f);
+    cavemen_.back().GetBrainWeightsMutable().AssimilateCulture(parentB.GetBrainWeights(), 0.20f);
 
     int parentClanId = parentA.ClanId();
     Tribe* trPtr = GetTribe(parentClanId);
@@ -248,11 +272,30 @@ std::vector<Vector2> Simulation::FindTribeSpawnLocations(int count) {
                 }
             }
 
+            // Radius 7: Mindestens 80% begehbares Land (Gras/Wald, kein Wasser, kein Berg, keine Klippen)
+            int totalRadius7 = 0;
+            int walkableRadius7 = 0;
+            for (int dy = -7; dy <= 7; ++dy) {
+                for (int dx = -7; dx <= 7; ++dx) {
+                    if (dx * dx + dy * dy > 49) continue;
+                    int nx = x + dx, ny = y + dy;
+                    if (!world_.IsInBounds(nx, ny)) continue;
+                    totalRadius7++;
+                    const TileData& ntd = world_.GetTileData(nx, ny);
+                    if ((ntd.type == TILE_GRASS || ntd.type == TILE_FOREST) &&
+                        ntd.waterType == WaterType::None && !ntd.isCliff &&
+                        ntd.type != TILE_MOUNTAIN && !ntd.isRiver) {
+                        walkableRadius7++;
+                    }
+                }
+            }
+            if (totalRadius7 > 0 && (float)walkableRadius7 / (float)totalRadius7 < 0.80f) continue;
+
             // Ausschlusskriterien:
-            if (minFreshDist < 3 || minFreshDist > 14) continue;
-            if (minSaltDist <= 8) continue;
+            if (minFreshDist < 3 || minFreshDist > 16) continue;
+            if (minSaltDist < 5) continue;
             if (woodTiles < 6 || stoneTiles < 3) continue;
-            if (flatTiles < 45) continue;
+            if (flatTiles < 40) continue;
 
             // Scoring
             float score = 100.0f;
@@ -372,7 +415,7 @@ void Simulation::RegenerateWorld(uint32_t seed) {
         }
 
         // Initiale autonome Anführer-Bestimmung (Schaukampf / Wahl / Ältestenrat)
-        tribes_[t]->Hierarchy().ElectLeader(cavemen_, tribes_[t]->Relationships(), eventLog_, cColor, tribes_[t]->Name());
+        tribes_[t]->Hierarchy().ElectLeader(cavemen_, tribes_[t]->Relationships(), eventLog_, cColor, tribes_[t]->Name(), tribes_[t]->Id());
     }
 
     // Zusätzliche Wildtiere
@@ -905,8 +948,51 @@ void Simulation::Update(float dt) {
         // 3. Stämme, autonomer Siedlungsplaner & Führung updaten
         int population = GetAliveCount();
         for (auto& t : tribes_) {
+            if (t->IsDisbanded()) continue;
+
+            // Prüfe auf Untergang / Auslöschung: Wenn Stamm geformt ist, aber keine lebenden Erwachsenen mehr existieren
+            if (t->IsFormed()) {
+                int livingAdults = 0;
+                for (const auto& c : cavemen_) {
+                    if (!c.IsDead() && c.ClanId() == t->Id() && c.GetRole() != Role::Child && c.AgeYears() >= 16.0f) {
+                        livingAdults++;
+                    }
+                }
+                if (livingAdults == 0) {
+                    t->SetDisbanded(true);
+                    eventLog_.Add(TextFormat("[Untergang] Der Stamm '%s' hat keine überlebenden Erwachsenen mehr und löst sich auf!",
+                                             t->Name().c_str()), t->FactionColor());
+
+                    // Suche nächsten aktiven, nicht aufgelösten Stamm für Waisen-Adoption
+                    Tribe* nearestActiveTribe = nullptr;
+                    float nearestDist = 1e9f;
+                    for (auto& other : tribes_) {
+                        if (!other->IsDisbanded() && other->Id() != t->Id()) {
+                            float d = Vector2Distance(t->CampPosition(), other->CampPosition());
+                            if (d < nearestDist) {
+                                nearestDist = d;
+                                nearestActiveTribe = other.get();
+                            }
+                        }
+                    }
+
+                    // Alle überlebenden Kinder / Waisen werden vom Nachbarstamm aufgenommen
+                    for (auto& c : cavemen_) {
+                        if (!c.IsDead() && c.ClanId() == t->Id()) {
+                            if (nearestActiveTribe) {
+                                c.SyncSocialVisuals(nearestActiveTribe->Id(), nearestActiveTribe->FactionColor(), (int)SocialRank::Worker, nearestActiveTribe->CampPosition());
+                                nearestActiveTribe->Hierarchy().AssignToClan(c.Id(), (int)c.GetRole(), nearestActiveTribe->Id());
+                                eventLog_.Add(TextFormat("%s (Kind) wurde als Waise vom %s aufgenommen.",
+                                                         c.Name().c_str(), nearestActiveTribe->Name().c_str()), nearestActiveTribe->FactionColor());
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+
             t->Update(world_, cavemen_, population, step, eventLog_);
-            t->Hierarchy().UpdateLeadership(t->Relationships(), cavemen_, eventLog_, t->FactionColor(), t->Name());
+            t->Hierarchy().UpdateLeadership(t->Relationships(), cavemen_, eventLog_, t->FactionColor(), t->Name(), t->Id());
         }
 
         // 4. Demografie (Nachwuchs & Vererbung), Herausforderungs-Duelle, Schisma & Clan-Visuals
@@ -985,13 +1071,15 @@ void Simulation::DrawWorld() const {
     // 1. Kachel-Welt + Phase-1-Kachelzustände (Feuer, Eis, Krater, Strombögen)
     world_.Draw(camera_.Get());
 
+    Vector2 mouseWorld = GetScreenToWorld2D(GetMousePosition(), camera_.Get());
+
     // Territorien & Gebäude aller unabhängigen Stämme zeichnen
     for (const auto& t : tribes_) {
         if (showTerritoryOverlay_) {
             t->DrawTerritoryOverlay(world_, totalSimTime_);
         }
         t->POIs().Draw(camera_.Get(), totalSimTime_);
-        t->Draw(totalSimTime_, &world_);
+        t->Draw(totalSimTime_, &world_, mouseWorld);
     }
 
     env_.DrawTileOverlays(world_, camera_.Get(), totalSimTime_);
@@ -1042,7 +1130,8 @@ void Simulation::DrawWorld() const {
             c->DrawDebugPath();
         }
         float visualYOffset = world_.GetVisualYOffset(c->Position());
-        c->Draw(spriteSheet_, highlighted, visualYOffset);
+        bool isNight = (timeOfDay > 0.72f || timeOfDay < 0.22f);
+        c->Draw(spriteSheet_, highlighted, visualYOffset, isNight);
     }
 
     // 8. Aktions-Vorschau an Mausposition (nur wenn ein Werkzeug aktiv ausgewählt ist)
@@ -1100,12 +1189,15 @@ void Simulation::DrawUI() const {
             tabY += 30.0f;
         }
         bool isActive = ((int)i == activeTribeIndex_);
+        bool isDisbanded = tribes_[i]->IsDisbanded();
         Rectangle tabR = { tabX, tabY, 130.0f, 26.0f };
         bool hov = CheckCollisionPointRec(mouseScreen, tabR);
-        DrawRectangleRec(tabR, isActive ? Fade(tribes_[i]->FactionColor(), 0.90f) : (hov ? Fade(tribes_[i]->FactionColor(), 0.50f) : Fade(BLACK, 0.78f)));
-        DrawRectangleLinesEx(tabR, isActive ? 2.0f : 1.0f, isActive ? GOLD : tribes_[i]->FactionColor());
-        FontManager::DrawTextCenteredShadow(TextFormat("[%d] %s", (int)i + 1, tribes_[i]->Name().c_str()),
-                                            tabR.x + tabR.width * 0.5f, tabR.y + 5.0f, 13.0f, RAYWHITE);
+        Color baseCol = isDisbanded ? DARKGRAY : tribes_[i]->FactionColor();
+        DrawRectangleRec(tabR, isActive ? Fade(baseCol, 0.90f) : (hov ? Fade(baseCol, 0.50f) : Fade(BLACK, 0.78f)));
+        DrawRectangleLinesEx(tabR, isActive ? 2.0f : 1.0f, isActive ? GOLD : (isDisbanded ? GRAY : tribes_[i]->FactionColor()));
+        std::string tabLabel = TextFormat("[%d] %s%s", (int)i + 1, tribes_[i]->Name().c_str(), isDisbanded ? " (Zerfallen)" : "");
+        FontManager::DrawTextCenteredShadow(tabLabel.c_str(),
+                                            tabR.x + tabR.width * 0.5f, tabR.y + 5.0f, 13.0f, isDisbanded ? LIGHTGRAY : RAYWHITE);
         tabX += 136.0f;
     }
 
@@ -1135,17 +1227,20 @@ void Simulation::DrawUI() const {
 
     // Lager-Vorräte (Rohstoffe & Veredelt) der aktiven Zivilisation
     const auto& stock = uiTribe.Stock();
-    int pop = GetAliveCount();
+    int clanPop = 0;
+    for (const auto& c : cavemen_) {
+        if (c.IsAlive() && c.ClanId() == uiTribe.Id()) clanPop++;
+    }
     int sleepCap = uiTribe.SleepingCapacity();
 
     float stockX = 245.0f + FontManager::MeasureText(epochSummary.c_str(), 15.0f) + 20.0f;
 
-    FontManager::DrawTextShadow(TextFormat("Pop: %d", pop), stockX, 15.0f, 15.0f, RAYWHITE);
+    FontManager::DrawTextShadow(TextFormat("Pop: %d", clanPop), stockX, 15.0f, 15.0f, RAYWHITE);
     stockX += 72.0f;
 
-    // Phase 5: Invertiertes Betten-Verhältnis (Betten/Pop, rot wenn Betten fehlen)
-    Color bedCol = (pop > sleepCap) ? RED : ((sleepCap == pop) ? GOLD : LIME);
-    FontManager::DrawTextShadow(TextFormat("Betten: %d/%d", sleepCap, pop), stockX, 15.0f, 15.0f, bedCol);
+    // Invertiertes Betten-Verhältnis (Betten/Pop, rot wenn Betten fehlen)
+    Color bedCol = (clanPop > sleepCap) ? RED : ((sleepCap == clanPop) ? GOLD : LIME);
+    FontManager::DrawTextShadow(TextFormat("Betten: %d/%d", sleepCap, clanPop), stockX, 15.0f, 15.0f, bedCol);
     stockX += 105.0f;
 
     FontManager::DrawTextShadow(TextFormat("Nahrung: %d (+%d)", stock.food, stock.cookedFood), stockX, 15.0f, 15.0f,
@@ -1213,7 +1308,7 @@ void Simulation::DrawUI() const {
 
     if (selected) {
         int panelW = 340;
-        int panelH = 550;
+        int panelH = 580;
         int panelX = screenW - panelW - 16;
         int panelY = 60;
 
@@ -1332,22 +1427,64 @@ void Simulation::DrawUI() const {
 
         // --- Utility AI Log & Entscheidungsgrund ---
         DrawLine(panelX + 10, panelY + 352, panelX + panelW - 10, panelY + 352, Fade(GRAY, 0.5f));
-        FontManager::DrawTextShadow("KI-Entscheidung (Utility AI):", panelX + 14.0f, panelY + 359.0f, 14.0f, GOLD);
-        FontManager::DrawTextShadow(TextFormat("-> Grund: %s", selected->DecisionReason().c_str()), panelX + 14.0f, panelY + 378.0f, 13.0f, RAYWHITE);
+        FontManager::DrawTextShadow("KI-Entscheidung (Utility AI):", panelX + 14.0f, panelY + 358.0f, 14.0f, GOLD);
+        std::string reasonStr = selected->DecisionReason();
+        if (reasonStr.rfind("Grund: ", 0) == 0) {
+            FontManager::DrawTextShadow(TextFormat("-> %s", reasonStr.c_str()), panelX + 14.0f, panelY + 376.0f, 13.0f, RAYWHITE);
+        } else {
+            FontManager::DrawTextShadow(TextFormat("-> Grund: %s", reasonStr.c_str()), panelX + 14.0f, panelY + 376.0f, 13.0f, RAYWHITE);
+        }
         FontManager::DrawTextShadow(TextFormat("Nutzen-Score: %.2f  |  Wissen: +%.0f%%", selected->DecisionScore(), selected->KnowledgeBonus() * 100.0f),
-                                    panelX + 14.0f, panelY + 398.0f, 13.0f, SKYBLUE);
+                                    panelX + 14.0f, panelY + 394.0f, 13.0f, SKYBLUE);
+
+        // --- Evolutionäres Gehirn & Reinforcement Learning ---
+        DrawLine(panelX + 10, panelY + 412, panelX + panelW - 10, panelY + 412, Fade(GRAY, 0.5f));
+        FontManager::DrawTextShadow("Evolution & Lernen (Gehirn-Genom):", panelX + 14.0f, panelY + 418.0f, 14.0f, Color{ 150, 225, 255, 255 });
+
+        const BrainGenome& bg = selected->GetBrainGenome();
+        const BrainWeights& bw = selected->GetBrainWeights();
+        float genePlast = bg.GetGene(BrainGene::Neuroplasticity);
+        float cogMult = trPtr ? trPtr->CognitiveMultiplier((int)cavemen_.size()) : 1.0f;
+        float effAlpha = 0.05f * genePlast * cogMult;
+
+        FontManager::DrawTextShadow(TextFormat("Plastizität: %.2fx (a=%.3f) | Exp: %d",
+                                               genePlast, effAlpha, bw.totalExperiences),
+                                    panelX + 14.0f, panelY + 436.0f, 13.0f, RAYWHITE);
+
+        int top1 = -1, top2 = -1;
+        float max1 = -1.0f, max2 = -1.0f;
+        for (int g = 0; g < (int)BrainGene::Count; ++g) {
+            if ((BrainGene)g == BrainGene::Neuroplasticity) continue;
+            float w = bw.weights[g];
+            if (w > max1) {
+                max2 = max1; top2 = top1;
+                max1 = w; top1 = g;
+            } else if (w > max2) {
+                max2 = w; top2 = g;
+            }
+        }
+        const char* name1 = (top1 >= 0) ? BrainGeneName((BrainGene)top1) : "-";
+        const char* name2 = (top2 >= 0) ? BrainGeneName((BrainGene)top2) : "-";
+        FontManager::DrawTextShadow(TextFormat("Top-Triebe: %s (%.2f), %s (%.2f)",
+                                               name1, max1, name2, max2),
+                                    panelX + 14.0f, panelY + 454.0f, 13.0f, Color{ 190, 235, 255, 255 });
+
+        FontManager::DrawTextShadow(TextFormat("Lektion: %s (%+.2f)",
+                                               bw.lastLessonDescription.c_str(), bw.lastAdjustment),
+                                    panelX + 14.0f, panelY + 472.0f, 12.0f,
+                                    (bw.lastAdjustment >= 0 ? Color{ 140, 240, 140, 255 } : Color{ 255, 150, 140, 255 }));
 
         // Letzte prägende Erinnerung
         const auto& memories = selected->Memory().Entries();
         if (!memories.empty()) {
             const auto& lastMem = memories.back();
             FontManager::DrawTextShadow(TextFormat("Erinnerung: %s (zu #%d)", MemoryTypeName(lastMem.type), lastMem.otherId),
-                                        panelX + 14.0f, panelY + 422.0f, 13.0f, (lastMem.baseImpact >= 0 ? LIME : ORANGE));
+                                        panelX + 14.0f, panelY + 494.0f, 13.0f, (lastMem.baseImpact >= 0 ? LIME : ORANGE));
         }
 
         // Legende für Beziehungslinien auf der Karte
-        FontManager::DrawTextShadow("Linien: Pink=Partner | Gold=Familie | Grün=Freund | Rot=Rivale", panelX + 14.0f, panelY + 456.0f, 12.0f, LIGHTGRAY);
-        FontManager::DrawTextShadow("Klick auf anderen Menschen zum Wechseln", panelX + 14.0f, panelY + 478.0f, 12.0f, GRAY);
+        FontManager::DrawTextShadow("Linien: Pink=Partner | Gold=Familie | Grün=Freund | Rot=Rivale", panelX + 14.0f, panelY + 520.0f, 12.0f, LIGHTGRAY);
+        FontManager::DrawTextShadow("Klick auf anderen Menschen zum Wechseln", panelX + 14.0f, panelY + 540.0f, 12.0f, GRAY);
     }
 
     // -------------------------------------------------------------------------

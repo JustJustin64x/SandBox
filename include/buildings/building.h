@@ -138,10 +138,10 @@ public:
     Building* GetMainTownCenter();
     const Building* GetMainTownCenter() const;
 
-    void Draw(float simTime, const World* world = nullptr) const;
+    void Draw(float simTime, const World* world = nullptr, Vector2 mouseWorld = { -9999.0f, -9999.0f }) const;
 
 private:
-    void DrawBuilding(const Building& b, float simTime) const;
+    void DrawBuilding(const Building& b, float simTime, Vector2 mouseWorld = { -9999.0f, -9999.0f }) const;
     void DrawConstructionSite(const Building& b) const;
     void DrawTownCenter(const Building& b, float simTime) const;
     void DrawHut(const Building& b, float simTime) const;

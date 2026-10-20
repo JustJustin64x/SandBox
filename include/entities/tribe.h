@@ -57,6 +57,8 @@ public:
 
     bool IsFormed() const { return isFormed_; }
     void SetFormed(bool formed) { isFormed_ = formed; }
+    bool IsDisbanded() const { return isDisbanded_; }
+    void SetDisbanded(bool disbanded) { isDisbanded_ = disbanded; }
 
     void InitWorld(const World& world);
 
@@ -85,7 +87,7 @@ public:
     Vector2 StockpilePosition() const { return { campPos_.x + 22.0f, campPos_.y + 2.0f }; }
 
     void Update(const World& world, const std::vector<Caveman>& cavemen, int population, float dt, EventLog& log);
-    void Draw(float time, const World* world = nullptr) const;
+    void Draw(float time, const World* world = nullptr, Vector2 mouseWorld = { -9999.0f, -9999.0f }) const;
 
     // --- Autonomer Siedlungsplaner (Stufe 1: Zero-Player-Bauentwicklung) -----
     struct SettlementPlan {
@@ -126,6 +128,9 @@ public:
     void CraftPlank() { stock_.wood -= 2; stock_.planks++; }
     void CraftBrick() { stock_.stone -= 2; stock_.bricks++; }
 
+    // --- Evolution & Kognitiver Stammesfaktor ------------------------------
+    float CognitiveMultiplier(int population = -1) const;
+
     // --- Ausrüstungs-Fertigung -----------------------------------------------
     bool CanCraftTorch() const { return stock_.wood >= 1; }
     bool CanCraftPickaxe() const { return stock_.wood >= 1 && stock_.stone >= 1; }
@@ -142,6 +147,7 @@ private:
     std::string name_ = "Ur-Sippe";
     Color factionColor_ = Color{ 215, 50, 50, 255 };
     bool isFormed_ = false;
+    bool isDisbanded_ = false;
     float formationTimer_ = 0.0f;
     int maxTerritoryCapacity_ = 35;
     int currentTerritoryCount_ = 0;

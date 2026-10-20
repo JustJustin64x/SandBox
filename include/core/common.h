@@ -20,3 +20,15 @@ constexpr int DEFAULT_WORLD_HEIGHT = 160;   // in Kacheln
 constexpr int TILE_SIZE            = 16;    // Pixel pro Kachel
 constexpr float ELEVATION_PIXEL_HEIGHT = 6.0f; // Vertikaler Versatz pro Höhenstufe im 2.5D Stacked Renderer
 
+enum class DeathCause {
+    Starvation,
+    Hypothermia,
+    AnimalAttack,
+    CombatDuel,
+    War,
+    Drowning,
+    MineCollapse,
+    OldAge
+};
+
+

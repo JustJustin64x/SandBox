@@ -26,6 +26,7 @@ struct TechNode {
 
     TechState state = TechState::Locked;
     std::vector<int> prereqIds;
+    bool requireAnyPrereq = false;
 
     // Koppelung an POI & Learning-by-Doing Praxis
     bool requiresPOI = false;

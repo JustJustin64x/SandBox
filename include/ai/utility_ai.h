@@ -25,6 +25,9 @@ struct UtilityDecision {
 
 class UtilityAI {
 public:
+    // Zentrale Vorbedingungsprüfung vor der Score-Berechnung (Parität zwischen Auswahl & Ausführung)
+    static bool CanPerformAction(const Caveman& agent, CavemanState state, const WorldContext& ctx, int targetId = -1);
+
     // Bewertet alle Handlungsoptionen und wählt situativ die beste Aktion
     static UtilityDecision Evaluate(const Caveman& agent, const WorldContext& ctx);
 

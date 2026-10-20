@@ -54,8 +54,38 @@ void POIManager::InitWorldPOIs(const World& world, Vector2 campPos) {
         if (PlacePOISpot(world, campPos, type, spot)) {
             poi.position = spot;
         } else {
-            // Fallback in Begehbarkeit
-            world.FindRandomWalkablePosition(campPos, 120.0f, poi.position, 60);
+            // Gezielte globale Fallback-Suche nach passendem Terrain
+            bool found = false;
+            for (int y = 6; y < world.Height() - 6 && !found; y += 2) {
+                for (int x = 6; x < world.Width() - 6 && !found; x += 2) {
+                    Vector2 cand = World::TileCenter(x, y);
+                    if (!world.IsWalkable(cand)) continue;
+                    const TileData& td = world.GetTileData(x, y);
+                    if (td.waterType != WaterType::None || td.type == TILE_MOUNTAIN || td.isCliff) continue;
+
+                    if (type == POIType::LimestoneCave || type == POIType::CopperOutcrop || type == POIType::IronRift) {
+                        if (world.HasNeighbor(x, y, TILE_MOUNTAIN)) {
+                            spot = cand;
+                            found = true;
+                        }
+                    } else if (type == POIType::TinRiverbed) {
+                        if ((td.isRiver || world.HasNeighbor(x, y, TILE_SHALLOW_WATER)) && td.waterType != WaterType::Saltwater) {
+                            spot = cand;
+                            found = true;
+                        }
+                    } else {
+                        if (td.type == TILE_GRASS) {
+                            spot = cand;
+                            found = true;
+                        }
+                    }
+                }
+            }
+            if (found) {
+                poi.position = spot;
+            } else {
+                world.FindRandomWalkablePosition(campPos, 120.0f, poi.position, 60);
+            }
         }
         pois_.push_back(poi);
     };
@@ -98,22 +128,31 @@ bool POIManager::PlacePOISpot(const World& world, Vector2 campPos, POIType type,
         int tx = World::ToTile(candidate.x);
         int ty = World::ToTile(candidate.y);
 
+        const TileData& td = world.GetTileData(tx, ty);
+        if (td.waterType != WaterType::None || td.type == TILE_MOUNTAIN || td.isCliff) continue;
+
         // Spezifische Terrain-Vorlieben
         if (type == POIType::LimestoneCave || type == POIType::CopperOutcrop || type == POIType::IronRift) {
-            // Nahe Fels/Berg oder Wald
-            bool nearMountainOrForest = world.HasNeighbor(tx, ty, TILE_MOUNTAIN) ||
-                                         world.HasNeighbor(tx, ty, TILE_FOREST) ||
-                                         world.GetTile(tx, ty) == TILE_FOREST;
-            if (!nearMountainOrForest && attempt < 250) continue;
+            // Höhlen, Kupfer und Eisenerz strikt auf Landkacheln angrenzend an Gebirge (TILE_MOUNTAIN)
+            bool nearMountain = world.HasNeighbor(tx, ty, TILE_MOUNTAIN);
+            if (!nearMountain) continue;
         } else if (type == POIType::TinRiverbed) {
-            // Nahe Wasser oder Sand
-            bool nearWater = world.HasNeighbor(tx, ty, TILE_SHALLOW_WATER) ||
-                             world.HasNeighbor(tx, ty, TILE_SAND) ||
-                             world.GetTile(tx, ty) == TILE_SAND;
-            if (!nearWater && attempt < 250) continue;
+            // Zinn-Flussbett strikt an Binnengewässern / Süßwasser-Flüssen (niemals Salzwasser/Ozean!)
+            bool nearFreshRiver = false;
+            bool nearSaltwater = false;
+            for (int dy = -2; dy <= 2; ++dy) {
+                for (int dx = -2; dx <= 2; ++dx) {
+                    int nx = tx + dx, ny = ty + dy;
+                    if (!world.IsInBounds(nx, ny)) continue;
+                    const TileData& ntd = world.GetTileData(nx, ny);
+                    if (ntd.waterType == WaterType::Saltwater) nearSaltwater = true;
+                    if (ntd.waterType == WaterType::Freshwater || ntd.isRiver) nearFreshRiver = true;
+                }
+            }
+            if (nearSaltwater || !nearFreshRiver) continue;
         } else if (type == POIType::AncientMegalith) {
-            // Schöne Lichtung auf Gras
-            if (world.GetTile(tx, ty) != TILE_GRASS && attempt < 250) continue;
+            // Schöne Lichtung auf Grasland
+            if (td.type != TILE_GRASS) continue;
         }
 
         // Abstand zu anderen POIs sicherstellen

@@ -100,6 +100,27 @@ float SocialActionEvaluator::ScoreDispute(const Caveman& agent, const Caveman& t
     return score;
 }
 
+float SocialActionEvaluator::ScoreTeachChild(const Caveman& agent, const Caveman& target, const WorldContext& ctx, std::string& outReason) {
+    if (agent.Id() == target.Id() || target.IsDead()) return 0.0f;
+    if (target.GetRole() != Role::Child && target.AgeYears() >= 16.0f) return 0.0f;
+    if (agent.GetRole() != Role::Elder && agent.AgeYears() < 30.0f) return 0.0f;
+
+    // Nur im eigenen Clan
+    if (!ctx.tribe.Hierarchy().AreSameClan(agent.Id(), target.Id())) return 0.0f;
+
+    float dist = Vector2Distance(agent.Position(), target.Position());
+    if (dist > 180.0f) return 0.0f;
+
+    float elderBonus = (agent.GetRole() == Role::Elder) ? 1.4f : 1.1f;
+    float distToCamp = Vector2Distance(agent.Position(), ctx.tribe.CampPosition());
+    float fireBonus = (distToCamp < 110.0f) ? 1.25f : 0.90f;
+    float distFactor = 1.0f - (dist / 180.0f) * 0.4f;
+
+    float score = std::clamp(0.55f * elderBonus * fireBonus * distFactor, 0.0f, 0.92f);
+    outReason = TextFormat("Kind %s unterrichten & Wissen weitergeben (Score: %.2f)", target.Name().c_str(), score);
+    return score;
+}
+
 // ============================================================================
 //  Ausführung
 // ============================================================================
@@ -174,5 +195,26 @@ void SocialActionEvaluator::ExecuteDispute(Caveman& agent, Caveman& target, Worl
 
     ctx.log.Add(TextFormat("Streit & Sticheleien zwischen %s und %s!", agent.Name().c_str(), target.Name().c_str()),
                 { 240, 120, 100, 255 });
+}
+
+void SocialActionEvaluator::ExecuteTeachChild(Caveman& agent, Caveman& target, WorldContext& ctx) {
+    RelationshipManager& rels = ctx.tribe.Relationships();
+    rels.ApplyInteraction(target.Id(), agent.Id(), MemoryType::SharedWork, 0.0f);
+
+    agent.ResetSocialNeed();
+    target.ResetSocialNeed();
+    agent.TriggerEmote(SocialEmote::Idea, 3.5f);
+    target.TriggerEmote(SocialEmote::Idea, 4.2f);
+
+    // Kind übernimmt 50% der im Leben gelernten Gehirngewichte des Ältesten
+    target.GetBrainWeightsMutable().AssimilateCulture(agent.GetBrainWeights(), 0.50f);
+
+    // Respekt und Vertrauen steigen
+    RelationshipEdge& e = rels.GetOrCreate(target.Id(), agent.Id());
+    e.respect = std::min(100.0f, e.respect + 20.0f);
+    e.trust   = std::min(100.0f, e.trust + 15.0f);
+
+    ctx.log.Add(TextFormat("Kulturelle Lehre: %s unterrichtet das Kind %s am Feuer (+50%% Gehirnprägung)!",
+                           agent.Name().c_str(), target.Name().c_str()), GOLD);
 }
 

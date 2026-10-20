@@ -1014,10 +1014,26 @@ void World::UpdateTerritories(const std::vector<std::unique_ptr<Tribe>>& tribes,
         tr->UpdateEmpireCapacity(cavemen);
     }
 
-    // 2. Multi-Source Dijkstra Einflussfelder berechnen
+    // 2. Multi-Source Dijkstra Einflussfelder berechnen (ausgelöste/ausgestorbene Clans überspringen)
     std::vector<std::vector<float>> tribeInfluences(tribes.size());
     for (size_t i = 0; i < tribes.size(); ++i) {
-        CalculateTribeInfluenceField(*tribes[i], tribeInfluences[i]);
+        if (!tribes[i]->IsDisbanded()) {
+            CalculateTribeInfluenceField(*tribes[i], tribeInfluences[i]);
+        } else {
+            tribeInfluences[i].assign((size_t)(width_ * height_), 0.0f);
+        }
+    }
+
+    // Sofortige Bereinigung der Gebiete aufgelöster Stämme
+    for (const auto& tr : tribes) {
+        if (tr->IsDisbanded()) {
+            for (int i = 0; i < width_ * height_; ++i) {
+                if (tiles_[i].ownerTribeId == tr->Id()) {
+                    tiles_[i].ownerTribeId = -1;
+                    tiles_[i].claimStrength = 0.0f;
+                }
+            }
+        }
     }
 
     // 3. Wasser- und Klippenkacheln neutral halten

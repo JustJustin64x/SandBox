@@ -77,7 +77,7 @@ Tribe::ProceduralClanInfo Tribe::GenerateProceduralClan(int id, Vector2 location
     prefixes.push_back("Otter");
 
     static const char* kSuffixes[] = {
-        "sippe", "bund", "jäger", "wächter", "volk", "stamm", "orden", "läufer", "wanderer", "hüter"
+        "Sippe", "Bund", "Jäger", "Wächter", "Volk", "Stamm", "Orden", "Läufer", "Wanderer", "Hüter"
     };
 
     uint32_t seedVal = (uint32_t)(id * 7919 + cx * 31 + cy * 17);
@@ -341,9 +341,12 @@ bool Tribe::FindBuildingSpotAround(const World& world, Vector2 center, Vector2& 
         const Vector2 p = { center.x + std::cos(angle) * radius, center.y + std::sin(angle) * radius };
 
         if (!world.IsWalkable(p)) continue;
-        if (Vector2Distance(p, StockpilePosition()) < 28.0f) continue;
+        if (Vector2Distance(p, StockpilePosition()) < 2.0f * TILE_SIZE) continue;
 
-        // Phase 3: Gebäude dürfen nur im eigenen Territorium oder direkt am Grenzrand platziert werden
+        // Mindestens 3 Kacheln Abstand zum Lagerfeuer (TownCenter)
+        if (Vector2Distance(p, campPos_) < 3.0f * TILE_SIZE) continue;
+
+        // Gebäude dürfen nur im eigenen Territorium oder direkt am Grenzrand platziert werden
         int tx = World::ToTile(p.x);
         int ty = World::ToTile(p.y);
         if (!world.IsInBounds(tx, ty)) continue;
@@ -362,9 +365,10 @@ bool Tribe::FindBuildingSpotAround(const World& world, Vector2 center, Vector2& 
             if (!bordersOwn) continue;
         }
 
+        // Mindestens 2 Kacheln Abstand zu allen anderen Gebäuden
         bool blocked = false;
         for (const auto& b : buildings_.All()) {
-            if (Vector2Distance(b.position, p) < 30.0f) { blocked = true; break; }
+            if (Vector2Distance(b.position, p) < 2.0f * TILE_SIZE) { blocked = true; break; }
         }
         if (blocked) continue;
 
@@ -379,12 +383,28 @@ bool Tribe::FindBuildingSpot(const World& world, Vector2& out) const {
 }
 
 void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Caveman>& cavemen, int population, float dt, EventLog& log) {
-    (void)cavemen;
+    (void)population;
     plannerTimer_ += dt;
     if (plannerTimer_ < 2.5f) return;
     plannerTimer_ = 0.0f;
 
-    // Phase 3: Wenn bereits eine Baustelle oder ein Gebäude-Ausbau im Gang ist, erst fertigstellen (kein Popup-Spam!)
+    // Wenn Stamm ausgelöscht oder aufgelöst ist, keine Baupläne erstellen!
+    if (isDisbanded_) {
+        planner_.active = false;
+        return;
+    }
+
+    // Zähle lebende Clanmitglieder
+    int clanPop = 0;
+    for (const auto& c : cavemen) {
+        if (c.IsAlive() && c.ClanId() == id_) clanPop++;
+    }
+    if (clanPop == 0) {
+        planner_.active = false;
+        return;
+    }
+
+    // Wenn bereits eine Baustelle oder ein Gebäude-Ausbau im Gang ist, erst fertigstellen (maximal 1 aktive Baustelle!)
     if (buildings_.HasUnfinishedBuilding()) {
         planner_.active = false;
         return;
@@ -399,8 +419,8 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
     Era era = age_.CurrentEra();
     int desiredFarms = (era >= Era::BronzeAge) ? 2 : ((skillTree_.IsUnlocked("tailoring") || skillTree_.IsUnlocked("carpentry")) ? 1 : 0);
 
-    // Priorität 1: Fehlende Schlafplätze (Betten < Pop) -> Neue Hütte planen
-    if (buildings_.TotalSleepingCapacity() < population) {
+    // Priorität 1: Fehlende Schlafplätze (Betten < Clan-Bevölkerung) -> Neue Hütte planen
+    if (buildings_.TotalSleepingCapacity() < clanPop) {
         Building proto;
         proto.type = BuildingType::Hut;
         proto.tier = 1;
@@ -579,8 +599,16 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
 
     if (!planner_.active) return;
 
-    // Prüfen, ob alle benötigten Baumaterialien im Lager vorhanden sind:
+    // Mindestens 60% der Gesamtkosten müssen im Lager vorrätig sein, bevor ein Bauauftrag erteilt wird:
     const ResourceCost& c = planner_.requiredCost;
+    int totalCost = c.wood + c.stone + c.planks + c.bricks;
+    int curAvailable = std::min(stock_.wood, c.wood) + std::min(stock_.stone, c.stone) +
+                       std::min(stock_.planks, c.planks) + std::min(stock_.bricks, c.bricks);
+    if (totalCost > 0 && (float)curAvailable < (float)totalCost * 0.60f) {
+        return;
+    }
+
+    // Prüfen, ob alle benötigten Baumaterialien im Lager vorhanden sind:
     if (stock_.wood >= c.wood && stock_.stone >= c.stone &&
         stock_.planks >= c.planks && stock_.bricks >= c.bricks) {
         if (planner_.isUpgrade && planner_.upgradeBuildingId >= 0) {
@@ -599,12 +627,23 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
 }
 
 int Tribe::EnsureConstructionSite(const World& world, EventLog& log) {
-    int existingSite = buildings_.FindActiveConstructionSite(campPos_);
-    if (existingSite >= 0) return existingSite;
+    if (buildings_.HasUnfinishedBuilding()) {
+        return buildings_.FindActiveConstructionSite(campPos_);
+    }
 
     BuildingType nextType = planner_.active ? planner_.type : BuildingType::Hut;
-    Vector2 center = planner_.active ? planner_.buildCenter : campPos_;
+    Building proto;
+    proto.type = nextType;
+    proto.tier = 1;
+    ResourceCost cost = proto.GetBuildCost();
+    int totalCost = cost.wood + cost.stone + cost.planks + cost.bricks;
+    int curAvailable = std::min(stock_.wood, cost.wood) + std::min(stock_.stone, cost.stone) +
+                       std::min(stock_.planks, cost.planks) + std::min(stock_.bricks, cost.bricks);
+    if (totalCost > 0 && (float)curAvailable < (float)totalCost * 0.60f) {
+        return -1;
+    }
 
+    Vector2 center = planner_.active ? planner_.buildCenter : campPos_;
     Vector2 spot;
     if (!FindBuildingSpotAround(world, center, spot)) return -1;
 
@@ -669,17 +708,25 @@ void Tribe::DrawTerritoryOverlay(const World& world, float /*simTime*/) const {
     DrawText(name_.c_str(), (int)labelPos.x - tw / 2, (int)labelPos.y, 11, mainColor);
 }
 
-void Tribe::Draw(float time, const World* world) const {
-    buildings_.Draw(time, world);
+void Tribe::Draw(float time, const World* world, Vector2 mouseWorld) const {
+    buildings_.Draw(time, world, mouseWorld);
     DrawStockpile(world);
+
+    // Clan-Banner 30px höher über dem Lagerfeuer/TownCenter
+    float campYOffset = world ? world->GetVisualYOffset(campPos_) : 0.0f;
+    Vector2 labelPos = { campPos_.x, campPos_.y - 62.0f + campYOffset };
+    int tw = MeasureText(name_.c_str(), 11);
+    DrawRectangle((int)labelPos.x - tw / 2 - 5, (int)labelPos.y - 4, tw + 10, 20, Fade(BLACK, 0.82f));
+    DrawRectangleLines((int)labelPos.x - tw / 2 - 5, (int)labelPos.y - 4, tw + 10, 20, factionColor_);
+    DrawText(name_.c_str(), (int)labelPos.x - tw / 2, (int)labelPos.y, 11, factionColor_);
 
     // Wenn der Siedlungsplaner auf Rohstoffe für das nächste Projekt wartet, dezentes Planungs-Banner am Lager
     if (planner_.active) {
-        float visualY = campPos_.y + 18.0f + (world ? world->GetVisualYOffset(campPos_) : 0.0f);
+        float visualY = campPos_.y + 18.0f + campYOffset;
         Vector2 p = { campPos_.x, visualY };
-        int tw = MeasureText(planner_.description.c_str(), 8);
-        DrawRectangle((int)p.x - tw / 2 - 3, (int)p.y - 1, tw + 6, 10, Fade(BLACK, 0.65f));
-        DrawText(planner_.description.c_str(), (int)p.x - tw / 2, (int)p.y, 8, Fade(GOLD, 0.9f));
+        int pw = MeasureText(planner_.description.c_str(), 8);
+        DrawRectangle((int)p.x - pw / 2 - 3, (int)p.y - 1, pw + 6, 10, Fade(BLACK, 0.65f));
+        DrawText(planner_.description.c_str(), (int)p.x - pw / 2, (int)p.y, 8, Fade(GOLD, 0.9f));
     }
 }
 
@@ -719,5 +766,36 @@ void Tribe::DrawStockpile(const World* world) const {
         DrawLineEx({ p.x + 10.0f, p.y + 1.0f }, { p.x + 13.0f, p.y - 5.0f }, 1.0f, BROWN);
         DrawPixel((int)p.x + 13, (int)p.y - 5, ORANGE);
     }
+}
+
+float Tribe::CognitiveMultiplier(int population) const {
+    float mult = 1.0f;
+
+    // 1. Kultureller & technologischer Fortschritt
+    Era era = age_.CurrentEra();
+    if (era == Era::BronzeAge) mult += 0.25f;
+    else if (era >= Era::IronAge) mult += 0.50f;
+
+    if (skillTree_.IsUnlocked("fire")) mult += 0.05f;             // Gekochte Speisen -> Gehirnwachstum
+    if (skillTree_.IsUnlocked("tailoring")) mult += 0.05f;        // Schutz vor Witterung -> mehr Denkzeit
+    if (skillTree_.IsUnlocked("animal_husbandry")) mult += 0.08f;// Domestizierung
+    if (skillTree_.IsUnlocked("agriculture")) mult += 0.10f;      // Sesshaftigkeit & Vorratshaltung
+    if (skillTree_.IsUnlocked("megalith")) mult += 0.15f;         // Kulturelles Gedächtnis & Rituale
+    if (skillTree_.IsUnlocked("carpentry")) mult += 0.05f;        // Geometrisches Bauen
+    if (skillTree_.IsUnlocked("masonry")) mult += 0.10f;          // Schrift & Steinmetzkunst
+
+    // 2. Ressourcen-Wohlstand vs. akuter Notstand
+    int pop = (population > 0) ? population : 4;
+    if (stock_.food >= pop * 3) {
+        mult += 0.15f; // Wohlstand ermöglicht Freizeit, Lernen & Experimente
+    } else if (stock_.food < pop) {
+        mult -= 0.10f; // Harter Notstand dämpft kognitive Muße
+    }
+
+    // 3. Demografische Vielfalt & Gemeinschaftsgröße
+    if (pop >= 8) mult += 0.10f;       // Breiter Genpool & generationenübergreifender Wissensaustausch
+    else if (pop <= 2) mult -= 0.15f;  // Soziale Isolation
+
+    return std::clamp(mult, 0.60f, 2.20f);
 }
 

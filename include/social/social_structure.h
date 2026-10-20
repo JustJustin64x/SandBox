@@ -81,8 +81,8 @@ public:
     // Führung, Meuterei & Stammesspaltung (Schisma)
     int GetChiefId() const { return kingdom_.monarchId; }
     int GetChiefIdForClan(int clanId) const;
-    void ElectLeader(std::vector<class Caveman>& cavemen, const class RelationshipManager& rels, class EventLog& log, Color clanColor, const std::string& clanName);
-    void UpdateLeadership(const class RelationshipManager& rels, std::vector<class Caveman>& cavemen, class EventLog& log, Color clanColor = WHITE, const std::string& clanName = "");
+    void ElectLeader(std::vector<class Caveman>& cavemen, const class RelationshipManager& rels, class EventLog& log, Color clanColor, const std::string& clanName, int targetClanId = -1);
+    void UpdateLeadership(const class RelationshipManager& rels, std::vector<class Caveman>& cavemen, class EventLog& log, Color clanColor = WHITE, const std::string& clanName = "", int targetClanId = -1);
     bool CheckLeadershipChallenge(class Tribe& tribe, std::vector<class Caveman>& cavemen, class EventLog& log);
     bool CheckForSchism(const class RelationshipManager& rels, const std::vector<class Caveman>& cavemen,
                         int& outRebelClanId, int& outRebelLeaderId);

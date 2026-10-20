@@ -11,6 +11,7 @@ void SkillTree::Init() {
     focusNodeId_ = -1;
 
     // --- 1. Steinzeit --------------------------------------------------------
+    // Root Tier 1a: Feuer und Steinklingen
     {
         TechNode n;
         n.id = 1;
@@ -34,11 +35,12 @@ void SkillTree::Init() {
         n.benefit = "Schaltet Faustkeil, Speer & Spitzhacken-Herstellung frei";
         n.era = Era::StoneAge;
         n.isMilestone = false;
-        n.state = TechState::Ready;
-        n.prereqIds = { 1 };
-        n.uiCol = 1; n.uiRow = 1;
+        n.state = TechState::Ready; // Root Tier 1a
+        n.prereqIds = {};
+        n.uiCol = 0; n.uiRow = 0;
         nodes_.push_back(n);
     }
+    // Tier 1b: Tierzucht, Fellkleidung & Fackeln (benötigt flint ODER fire)
     {
         TechNode n;
         n.id = 13;
@@ -49,8 +51,24 @@ void SkillTree::Init() {
         n.era = Era::StoneAge;
         n.isMilestone = false;
         n.state = TechState::Locked;
-        n.prereqIds = { 2 };
-        n.uiCol = 0; n.uiRow = 0;
+        n.prereqIds = { 1, 2 };
+        n.requireAnyPrereq = true; // Kausal: flint ODER fire
+        n.uiCol = 1; n.uiRow = 0;
+        nodes_.push_back(n);
+    }
+    {
+        TechNode n;
+        n.id = 15;
+        n.key = "animal_husbandry";
+        n.name = "Tierzucht & Haltung";
+        n.description = "Zähmen und Halten von Tieren in Gattern. Liefert stetig Wolle, Milch und Fleisch.";
+        n.benefit = "Ermöglicht Tiergehege & Domestizierung";
+        n.era = Era::StoneAge;
+        n.isMilestone = false;
+        n.state = TechState::Locked;
+        n.prereqIds = { 1, 2 };
+        n.requireAnyPrereq = true; // Kausal: flint ODER fire
+        n.uiCol = 1; n.uiRow = 2;
         nodes_.push_back(n);
     }
     {
@@ -63,10 +81,12 @@ void SkillTree::Init() {
         n.era = Era::StoneAge;
         n.isMilestone = false;
         n.state = TechState::Locked;
-        n.prereqIds = { 2 };
-        n.uiCol = 2; n.uiRow = 0;
+        n.prereqIds = { 1, 2 };
+        n.requireAnyPrereq = true;
+        n.uiCol = 1; n.uiRow = 1;
         nodes_.push_back(n);
     }
+    // Tier 1c: Ackerbau, Megalith, Höhlenkunde, Zimmererkunst (benötigt Tier 1b)
     {
         TechNode n;
         n.id = 14;
@@ -77,7 +97,8 @@ void SkillTree::Init() {
         n.era = Era::StoneAge;
         n.isMilestone = true;
         n.state = TechState::Locked;
-        n.prereqIds = { 2, 3 }; // Kausale Progression: Steinklingen & Feuer/Fackeln nötig
+        n.prereqIds = { 13, 15 }; // Benötigt Tier 1b (Fellkleidung/Körbe oder Tierzucht)
+        n.requireAnyPrereq = true;
         n.uiCol = 2; n.uiRow = 2;
         nodes_.push_back(n);
     }
@@ -91,7 +112,8 @@ void SkillTree::Init() {
         n.era = Era::StoneAge;
         n.isMilestone = true;
         n.state = TechState::Locked;
-        n.prereqIds = { 2, 3 }; // Fackel + Steinaxt/Hacke zur Erkundung
+        n.prereqIds = { 3, 13 }; // Benötigt Fackeln & Tier 1b
+        n.requireAnyPrereq = false;
         n.requiresPOI = true;
         n.targetPOIType = POIType::LimestoneCave;
         n.gear = { true, true, true }; // Fackel + Hacke + Proviant
@@ -108,7 +130,8 @@ void SkillTree::Init() {
         n.era = Era::StoneAge;
         n.isMilestone = true;
         n.state = TechState::Locked;
-        n.prereqIds = { 2, 3 };
+        n.prereqIds = { 13, 15 };
+        n.requireAnyPrereq = true;
         n.requiresPOI = true;
         n.targetPOIType = POIType::AncientMegalith;
         n.gear = { false, false, true }; // Proviant
@@ -127,7 +150,8 @@ void SkillTree::Init() {
         n.era = Era::BronzeAge;
         n.isMilestone = true;
         n.state = TechState::Locked;
-        n.prereqIds = { 2, 3 };
+        n.prereqIds = { 13, 15 };
+        n.requireAnyPrereq = true;
         n.uiCol = 4; n.uiRow = 1;
         nodes_.push_back(n);
     }
@@ -239,13 +263,26 @@ void SkillTree::RefreshNodeStates(const POIManager& pois, EventLog& log) {
             continue;
         }
 
-        // Prüfen, ob alle Vorbedingungen gemeistert sind
-        bool prereqsMet = true;
-        for (int pid : node.prereqIds) {
-            const auto* pnode = GetNode(pid);
-            if (!pnode || pnode->state != TechState::Mastered) {
-                prereqsMet = false;
-                break;
+        // Prüfen, ob Vorbedingungen gemeistert sind (All vs. Any)
+        bool prereqsMet = false;
+        if (node.prereqIds.empty()) {
+            prereqsMet = true;
+        } else if (node.requireAnyPrereq) {
+            for (int pid : node.prereqIds) {
+                const auto* pnode = GetNode(pid);
+                if (pnode && pnode->state == TechState::Mastered) {
+                    prereqsMet = true;
+                    break;
+                }
+            }
+        } else {
+            prereqsMet = true;
+            for (int pid : node.prereqIds) {
+                const auto* pnode = GetNode(pid);
+                if (!pnode || pnode->state != TechState::Mastered) {
+                    prereqsMet = false;
+                    break;
+                }
             }
         }
 

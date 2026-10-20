@@ -599,17 +599,17 @@ float BuildingManager::GetWarmthAt(Vector2 pos) const {
 // ============================================================================
 //  Zeichnen der Gebäude
 // ============================================================================
-void BuildingManager::Draw(float simTime, const World* world) const {
+void BuildingManager::Draw(float simTime, const World* world, Vector2 mouseWorld) const {
     for (const auto& b : buildings_) {
         Building bCopy = b;
         if (world) {
             bCopy.position.y += world->GetVisualYOffset(b.position);
         }
-        DrawBuilding(bCopy, simTime);
+        DrawBuilding(bCopy, simTime, mouseWorld);
     }
 }
 
-void BuildingManager::DrawBuilding(const Building& b, float simTime) const {
+void BuildingManager::DrawBuilding(const Building& b, float simTime, Vector2 mouseWorld) const {
     float x = b.position.x;
     float y = b.position.y;
 
@@ -646,22 +646,33 @@ void BuildingManager::DrawBuilding(const Building& b, float simTime) const {
         }
     }
 
-    // Fortschrittsbalken bei Bau/Upgrade oder Schadensbalken bei Reparaturbedarf
+    // Fortschrittsbalken bei Bau/Upgrade oder Schadensbalken bei Reparaturbedarf (kompakt 24x4)
     if (b.NeedsWork()) {
-        float barY = y - 29.0f;
+        float barY = y - 26.0f;
         bool isRepair = (b.finished && !b.underUpgrade && b.hp < b.maxHp);
         float pct = isRepair ? std::clamp(b.hp / b.maxHp, 0.0f, 1.0f) : (b.progress / 100.0f);
-        DrawRectangleRec({ x - 14.0f, barY, 28.0f, 4.0f }, Fade(BLACK, 0.85f));
-        DrawRectangleRec({ x - 14.0f, barY, 28.0f * pct, 4.0f }, isRepair ? ORANGE : (b.underUpgrade ? SKYBLUE : GOLD));
-        DrawRectangleLines((int)(x - 14.0f), (int)barY, 28, 5, WHITE);
+        DrawRectangleRec({ x - 12.0f, barY, 24.0f, 4.0f }, Fade(BLACK, 0.85f));
+        DrawRectangleRec({ x - 12.0f, barY, 24.0f * pct, 4.0f }, isRepair ? ORANGE : (b.underUpgrade ? SKYBLUE : GOLD));
+        DrawRectangleLines((int)(x - 12.0f), (int)barY, 24, 4, Fade(WHITE, 0.8f));
+    }
 
-        // Deutliche Beschriftung des Bauvorhabens ("Hütte (45%)")
-        if (!b.finished || b.underUpgrade) {
-            std::string label = TextFormat("%s (%d%%)", BuildingTypeName(b.type, b.tier), (int)b.progress);
-            int tw = MeasureText(label.c_str(), 9);
-            DrawRectangle((int)(x - tw * 0.5f - 2), (int)(barY - 10), tw + 4, 9, Fade(BLACK, 0.70f));
-            DrawText(label.c_str(), (int)(x - tw * 0.5f), (int)(barY - 9), 9, GOLD);
+    // Text-Name und Status nur bei Hover im 2.5-Kacheln-Radius anzeigen (fontSize 11)
+    if (Vector2Distance(mouseWorld, b.position) <= 2.5f * TILE_SIZE) {
+        float labelY = y - 42.0f;
+        std::string label;
+        if (!b.finished) {
+            label = TextFormat("%s (%d%%)", BuildingTypeName(b.type, b.tier), (int)b.progress);
+        } else if (b.underUpgrade) {
+            label = TextFormat("%s (Ausbau: %d%%)", BuildingTypeName(b.type, b.tier), (int)b.progress);
+        } else if (b.hp < b.maxHp) {
+            label = TextFormat("%s (%d%%)", BuildingTypeName(b.type, b.tier), (int)((b.hp / b.maxHp) * 100.0f));
+        } else {
+            label = BuildingTypeName(b.type, b.tier);
         }
+        int tw = MeasureText(label.c_str(), 11);
+        DrawRectangle((int)(x - tw * 0.5f - 4), (int)(labelY - 2), tw + 8, 16, Fade(BLACK, 0.85f));
+        DrawRectangleLines((int)(x - tw * 0.5f - 4), (int)(labelY - 2), tw + 8, 16, Fade(GOLD, 0.75f));
+        DrawText(label.c_str(), (int)(x - tw * 0.5f), (int)labelY, 11, RAYWHITE);
     }
 }
 
