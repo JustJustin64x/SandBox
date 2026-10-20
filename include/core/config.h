@@ -17,30 +17,31 @@ constexpr float kMaxSimStep    = 0.05f;   // größter Simulationsschritt (Sub-S
 // --- Bedürfnisse ------------------------------------------------------------
 // Hunger ist ein BEDÜRFNIS: 0 = satt, 100 = verhungernd (steigt über Zeit).
 // "Hunger > 70" bedeutet also: nur noch 30 % Sättigung übrig.
-constexpr float kHungerPerSecond           = 0.9f;
-constexpr float kTirednessPerSecond        = 0.65f;
-constexpr float kWorkTirednessPerSecond    = 0.5f;   // zusätzlich während Arbeit
+constexpr float kHungerPerSecond           = 0.22f;
+constexpr float kTirednessPerSecond        = 0.50f;
+constexpr float kWorkTirednessPerSecond    = 0.40f;   // zusätzlich während Arbeit
 constexpr float kStarvationDamagePerSecond = 2.5f;   // HP-Verlust bei Hunger = 100
 constexpr float kHungerThreshold           = 70.0f;  // ab hier: Nahrung suchen
 constexpr float kHungerCritical            = 90.0f;  // weckt Schlafende auf
 constexpr float kSatedHunger               = 10.0f;  // hört auf zu essen
 constexpr float kTirednessThreshold        = 80.0f;  // ab hier: schlafen gehen
 constexpr float kApMinForWork              = 10.0f;  // darunter: erst ausruhen
-constexpr float kApRegenPerSecond            = 2.5f;   // passive AP-Regeneration im Wachzustand
+constexpr float kApRegenPerSecond          = 2.5f;   // passive AP-Regeneration im Wachzustand
+constexpr float kAgeRate                   = 0.03f;  // Lebensjahre pro Sekunde (~1.8 Jahre/Minute)
 
 // --- Schlaf -----------------------------------------------------------------
 constexpr float kSleepTirednessRecovery = 6.0f;   // pro Sekunde (unter freiem Himmel)
 constexpr float kSleepApRegen           = 8.0f;   // pro Sekunde
 constexpr float kHutSleepBonus          = 1.6f;   // Multiplikator in einer Hütte
 constexpr float kSleepHungerFactor      = 0.35f;  // Hunger steigt im Schlaf langsamer
-constexpr float kSleepHpRegen           = 1.0f;   // HP-Heilung im Schlaf (wenn nicht hungrig)
+constexpr float kSleepHpRegen           = 6.0f;   // HP-Heilung im Schlaf (wenn nicht hungrig)
 constexpr float kWakeTiredness          = 5.0f;
 constexpr float kWakeAp                 = 90.0f;
 
 // --- Essen ------------------------------------------------------------------
 constexpr float kEatInterval          = 0.8f;   // Sekunden pro verzehrter Nahrungseinheit
-constexpr float kHungerPerFood        = 22.0f;  // so viel Hunger stillt 1 Nahrung
-constexpr int   kFoodReservePerMember = 2;      // Vorratsziel: Jäger/Sammler füllen auf
+constexpr float kHungerPerFood        = 45.0f;  // so viel Hunger stillt 1 Nahrung
+constexpr int   kFoodReservePerMember = 3;      // Vorratsziel: Jäger/Sammler füllen auf
 
 // --- Arbeit: AP-Kosten pro Sekunde ------------------------------------------
 constexpr float kApCostHunt       = 6.0f;
@@ -60,9 +61,9 @@ constexpr int   kStoneYield         = 2;
 // --- Jagd -------------------------------------------------------------------
 constexpr float kAnimalHp            = 30.0f;
 constexpr int   kAnimalMeat          = 6;
-constexpr int   kAnimalCounterChance = 20;    // % Chance pro Sekunde auf Gegenangriff
-constexpr int   kAnimalDamageMin     = 4;
-constexpr int   kAnimalDamageMax     = 10;
+constexpr int   kAnimalCounterChance = 10;    // % Chance pro Sekunde auf Gegenangriff
+constexpr int   kAnimalDamageMin     = 2;
+constexpr int   kAnimalDamageMax     = 5;
 constexpr float kAnimalSpeed         = 16.0f;
 constexpr float kAnimalRespawnTime   = 25.0f;
 
@@ -78,9 +79,9 @@ constexpr int   kHutCapacity        = 3;     // Schlafplätze pro Hütte
 constexpr float kBuildRatePerSecond = 5.0f;  // Fortschritt in % pro Sekunde & Bauarbeiter
 
 // --- Startbedingungen -------------------------------------------------------
-constexpr int kStartFood  = 12;
-constexpr int kStartWood  = 6;
-constexpr int kStartStone = 3;
+constexpr int kStartFood  = 25;
+constexpr int kStartWood  = 35;
+constexpr int kStartStone = 15;
 
 constexpr int kStartHunters   = 3;
 constexpr int kStartGatherers = 3;
@@ -94,10 +95,10 @@ constexpr int kRockCount   = 28;
 constexpr int kAnimalCount = 36;
 
 // --- Wärme & Kälte ---------------------------------------------------------
-constexpr float kWarmthLossDay            = 0.3f;   // pro Sekunde tagsüber
-constexpr float kWarmthLossNight          = 2.2f;   // pro Sekunde nachts
-constexpr float kWarmthRecoverNearFire    = 8.0f;   // am Lagerfeuer
-constexpr float kWarmthRecoverInShelter   = 12.0f;  // in einer Hütte
+constexpr float kWarmthLossDay            = 0.18f;  // pro Sekunde tagsüber
+constexpr float kWarmthLossNight          = 0.85f;  // pro Sekunde nachts
+constexpr float kWarmthRecoverNearFire    = 10.0f;  // am Lagerfeuer
+constexpr float kWarmthRecoverInShelter   = 14.0f;  // in einer Hütte
 constexpr float kFreezingThreshold        = 25.0f;  // ab hier: dringend Schutz suchen
 constexpr float kColdDamagePerSecond      = 2.0f;   // Schaden wenn Wärme = 0
 

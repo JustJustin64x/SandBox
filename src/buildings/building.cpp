@@ -199,7 +199,7 @@ void BuildingManager::Update(float dt, bool isBadWeather, Stockpile& stock, Even
         if (b.type == BuildingType::TownCenter || b.type == BuildingType::Kiln) {
             if (b.fuel > 0.0f) {
                 bool openFire = (b.type == BuildingType::TownCenter && b.tier == 1);
-                float burnRate = openFire ? (isBadWeather ? 1.65f : 0.72f) : (isBadWeather ? 0.65f : 0.48f);
+                float burnRate = openFire ? (isBadWeather ? 0.45f : 0.22f) : (isBadWeather ? 0.25f : 0.15f);
                 float prevFuel = b.fuel;
                 b.fuel = std::max(0.0f, b.fuel - burnRate * dt);
                 if (prevFuel > 0.0f && b.fuel <= 0.0f) {

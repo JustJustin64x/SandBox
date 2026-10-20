@@ -163,6 +163,7 @@ void Simulation::SpawnChildFromParents(Caveman& parentA, Caveman& parentB, Vecto
     Personality childPers = Personality::Inherit(parentA.GetPersonality(), parentB.GetPersonality());
     Gender childGender = (GetRandomValue(0, 1) == 0) ? Gender::Male : Gender::Female;
     cavemen_.emplace_back(id, RoleDefaultNames(Role::Child, id), Role::Child, spawnPos, childGender);
+    cavemen_.back().SetAgeYears(0.0f);
     cavemen_.back().SetPersonality(childPers);
 
     // Evolutionäre Genetik: Crossover der Eltern-Genome mit Mutation (6% Rate, 12% Amplitude)
@@ -668,8 +669,10 @@ void Simulation::UpdateDemographicsAndFactions(float dt) {
                 if (!c.IsDead() && c.ClanId() == tr->Id()) tribePop++;
             }
 
-            if (tribePop < 24 && tr->Stock().food >= std::max(6, tribePop + 2) &&
-                tr->Buildings().GetBuildingCount(BuildingType::Hut, true) > 0) {
+            int totalFood = tr->Stock().food + tr->Stock().cookedFood;
+            bool hasShelter = tr->Buildings().GetBuildingCount(BuildingType::Hut, true) > 0;
+            // Frühe Stämme oder kleine Populationen (< 8) dürfen sich auch am Stammes-Lagerfeuer fortpflanzen
+            if (tribePop < 24 && totalFood >= 5 && (hasShelter || tribePop < 8)) {
                 for (size_t i = 0; i < cavemen_.size(); ++i) {
                     if (cavemen_[i].IsDead() || cavemen_[i].ClanId() != tr->Id() || cavemen_[i].GetRole() == Role::Child) continue;
                     if (cavemen_[i].Hunger() > 65.0f) continue;
@@ -692,9 +695,17 @@ void Simulation::UpdateDemographicsAndFactions(float dt) {
                         if (const Building* hut = tr->Buildings().Get(hutId)) {
                             world_.FindRandomWalkablePosition(hut->position, 16.0f, spawnPos, 15);
                         }
+                    } else {
+                        world_.FindRandomWalkablePosition(tr->CampPosition(), 20.0f, spawnPos, 15);
                     }
 
-                    tr->Stock().food = std::max(0, tr->Stock().food - 3);
+                    if (tr->Stock().food >= 3) {
+                        tr->Stock().food -= 3;
+                    } else {
+                        int rem = 3 - tr->Stock().food;
+                        tr->Stock().food = 0;
+                        tr->Stock().cookedFood = std::max(0, tr->Stock().cookedFood - rem);
+                    }
                     SpawnChildFromParents(cavemen_[i], cavemen_[partnerIdx], spawnPos);
                     break;
                 }

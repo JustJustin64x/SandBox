@@ -133,14 +133,14 @@ Caveman::Caveman(int id, std::string name, Role role, Vector2 position, Gender g
 
     // Lebensalter je nach Startrolle initialisieren
     if (role_ == Role::Child) {
-        ageYears_ = (float)GetRandomValue(2, 10);
+        ageYears_ = (float)GetRandomValue(4, 9);
     } else if (role_ == Role::Elder) {
-        ageYears_ = (float)GetRandomValue(56, 66);
+        ageYears_ = (float)GetRandomValue(56, 62);
         knowledgeBonus_ = 0.15f;
     } else {
-        ageYears_ = (float)GetRandomValue(18, 35);
+        ageYears_ = (float)GetRandomValue(18, 28);
     }
-    maxLifespan_ = (float)GetRandomValue(74, 86);
+    maxLifespan_ = (float)GetRandomValue(76, 88);
 
     // Unveränderliches psychologisches Profil & Evolutionäres Gehirn-Genom
     personality_ = Personality::GenerateRandom((int)role_);
@@ -237,7 +237,7 @@ void Caveman::Update(WorldContext& ctx, float dt) {
     }
 
     // 0) Demografie & Lebenszyklus (Kind -> Jäger/Sammler -> Ältester -> Alterstod)
-    ageYears_ += dt * 0.20f; // ca. 12 Lebensjahre pro Spielminute
+    ageYears_ += dt * cfg::kAgeRate; // ca. 1.8 Lebensjahre pro Spielminute (ausbalancierte Generationen)
     if (role_ == Role::Child && ageYears_ >= 16.0f) {
         // Genetische Persönlichkeit bestimmt Berufung beim Heranwachsen
         bool hunterTrait = (personality_.dominance + personality_.aggression * 0.8f) >
@@ -462,6 +462,11 @@ void Caveman::UpdateNeeds(WorldContext& ctx, float dt) {
     }
     targetLoyalty = std::clamp(targetLoyalty, 5.0f, 100.0f);
     loyalty_ += (targetLoyalty - loyalty_) * 0.05f * dt;
+
+    // 7. Passive Lebensregeneration bei guter Verfassung (satt & warm)
+    if (hunger_ < 50.0f && warmth_ > 50.0f && hp_ < cfg::kMaxStat) {
+        hp_ = std::min(cfg::kMaxStat, hp_ + 0.6f * dt);
+    }
 }
 
 void Caveman::TakeDamage(float amount, const char* cause, WorldContext& ctx) {
@@ -1783,9 +1788,12 @@ void Caveman::UpdateSleeping(WorldContext& ctx, float dt) {
     const float bonus = sleepingInShelter_ ? cfg::kHutSleepBonus : 1.0f;
     tiredness_ = std::max(0.0f, tiredness_ - cfg::kSleepTirednessRecovery * bonus * dt);
     ap_ = std::min(cfg::kMaxStat, ap_ + cfg::kSleepApRegen * bonus * dt);
-    if (hunger_ < cfg::kHungerThreshold) hp_ = std::min(cfg::kMaxStat, hp_ + cfg::kSleepHpRegen * dt);
+    if (hunger_ < cfg::kHungerThreshold) {
+        hp_ = std::min(cfg::kMaxStat, hp_ + cfg::kSleepHpRegen * (sleepingInShelter_ ? 1.5f : 1.0f) * dt);
+    }
 
-    const bool rested = tiredness_ <= cfg::kWakeTiredness && ap_ >= cfg::kWakeAp;
+    const bool injured = (hp_ < 85.0f);
+    const bool rested = tiredness_ <= cfg::kWakeTiredness && ap_ >= cfg::kWakeAp && (!injured || hunger_ > 60.0f);
     if (rested || hunger_ >= cfg::kHungerCritical) FinishTask();
 }
 

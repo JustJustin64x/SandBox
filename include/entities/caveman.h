@@ -168,6 +168,7 @@ public:
     void ModifyLoyalty(float delta) { loyalty_ = std::clamp(loyalty_ + delta, 0.0f, 100.0f); }
     float SocialNeed() const       { return socialNeed_; }
     float AgeYears() const         { return ageYears_; }
+    void SetAgeYears(float a)      { ageYears_ = a; }
     float MaxLifespan() const      { return maxLifespan_; }
     CarryType Carrying() const     { return carryType_; }
     int CarryAmount() const        { return carryAmount_; }

@@ -97,12 +97,12 @@ Tribe::ProceduralClanInfo Tribe::GenerateProceduralClan(int id, Vector2 location
 
 Tribe::Tribe(Vector2 campPosition) : campPos_(campPosition) {
     stock_.food       = cfg::kStartFood;
-    stock_.cookedFood = 2;
+    stock_.cookedFood = 6;
     stock_.wood       = cfg::kStartWood;
     stock_.stone      = cfg::kStartStone;
     stock_.planks     = 0;
     stock_.bricks     = 0;
-    stock_.tools      = 0;
+    stock_.tools      = 2;
     stock_.torches    = 2;
     stock_.pickaxes   = 1;
     stock_.provisions = 3;

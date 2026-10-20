@@ -13,7 +13,7 @@ namespace {
 
 // Kachel-Eigenschaften (Reihenfolge entspricht TileType).
 const TileProperty kTileProperties[TILE_TYPE_COUNT] = {
-    { "Tiefwasser",  { 22, 60, 130, 255 },   true,  true  }, // In Phase 2 schwimmbar
+    { "Tiefwasser",  { 22, 60, 130, 255 },   false, true  }, // Tiefwasser unpassierbar (verhindert Ertrinken)
     { "Flachwasser", { 45, 120, 195, 255 },  true,  true  },
     { "Sand",        { 215, 195, 120, 255 }, true,  false },
     { "Gras",        { 80, 160, 60, 255 },   true,  false },
