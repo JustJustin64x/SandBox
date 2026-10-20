@@ -19,7 +19,9 @@ enum class BuildingType {
     FarmPlot,         // Ackerfeld (Aussaat -> Grüne Halme -> Reifes Getreide)
     AnimalPen,        // Tiergehege (Domestizierte Herdentiere für Fleisch, Fell & Knochen)
     Monument,         // Totempfahl -> Megalith-Steinkreis -> Tempel-Altar (Kultur & Kohäsion)
-    Grave             // Ahnengrab / Hügelgrab für verstorbene Stammesmitglieder
+    Grave,            // Ahnengrab / Hügelgrab für verstorbene Stammesmitglieder
+    BorderTotem,      // Steinzeit – Totem / Grenzstein (früher territorialer Einfluss-Anker)
+    Outpost           // Bronzezeit – Grenzposten / Außenposten (stabiler territorialer Anker)
 };
 
 const char* BuildingTypeName(BuildingType type, int tier);
@@ -82,7 +84,7 @@ struct Building {
 
     bool IsAvailableShelter() const {
         return finished && !underUpgrade && hp > 20.0f &&
-               (type == BuildingType::Hut || type == BuildingType::TownCenter) && occupants < capacity;
+               (type == BuildingType::Hut) && occupants < capacity;
     }
 
     bool NeedsWork() const {
@@ -94,6 +96,11 @@ struct Building {
     ResourceCost GetBuildCost() const;
     ResourceCost GetUpgradeCost() const;
     bool CanUpgrade(int currentAge) const;
+
+    // Einfluss-Anker (Phase 1)
+    float GetAnchorRadius() const;
+    float GetInfluencePower() const;
+    bool IsTerritoryAnchor() const;
 };
 
 class BuildingManager {
@@ -126,6 +133,10 @@ public:
     int GetBuildingCount(BuildingType type, bool finishedOnly = true) const;
     int GetMaxTier(BuildingType type) const;
     int TotalSleepingCapacity() const;
+    bool HasUnfinishedBuilding() const;
+
+    Building* GetMainTownCenter();
+    const Building* GetMainTownCenter() const;
 
     void Draw(float simTime, const World* world = nullptr) const;
 
@@ -142,6 +153,8 @@ private:
     void DrawAnimalPen(const Building& b, float simTime) const;
     void DrawMonument(const Building& b, float simTime) const;
     void DrawGrave(const Building& b, float simTime) const;
+    void DrawBorderTotem(const Building& b, float simTime) const;
+    void DrawOutpost(const Building& b, float simTime) const;
 
     std::vector<Building> buildings_;
     int nextId_ = 1;

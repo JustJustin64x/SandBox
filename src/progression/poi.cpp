@@ -266,10 +266,18 @@ void POIManager::Draw(const Camera2D& camera, float time) const {
             DrawRectangleLines(barX - 1, barY - 1, barW + 2, barH + 2, Fade(RAYWHITE, 0.6f));
         }
 
-        // Meisterungs-Abzeichen
+        // Meisterungs-Abzeichen oder dezentes [?] für unerkundete POIs
         if (poi.state == POIState::Explored) {
             DrawCircle((int)p.x + 8, (int)p.y - 12, 4.0f, GREEN);
             DrawCircleLines((int)p.x + 8, (int)p.y - 12, 4.0f, RAYWHITE);
+        } else if (poi.state != POIState::Exploring) {
+            // Dezenter, schwebender [?]-Indikator
+            float bob = std::sin(time * 3.5f + p.x * 0.15f) * 1.5f;
+            int qx = (int)p.x;
+            int qy = (int)(p.y - 18.0f + bob);
+            DrawCircle(qx, qy, 5.0f, Fade(BLACK, 0.70f));
+            DrawCircleLines(qx, qy, 5.0f, Fade(GOLD, 0.85f));
+            DrawText("?", qx - 2, qy - 4, 10, GOLD);
         }
 
         // Hover-Tooltip

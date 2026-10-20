@@ -253,10 +253,12 @@ bool AgeManager::CanBuild(BuildingType type) const {
         case BuildingType::FarmPlot:
         case BuildingType::Pantry:
         case BuildingType::Kiln:
+        case BuildingType::BorderTotem:
             return true;
         case BuildingType::CraftBench:
         case BuildingType::AnimalPen:
-            return currentEra_ >= Era::BronzeAge || currentEpoch_ >= HistoricalEpoch::Neolithic;
+        case BuildingType::Outpost:
+            return currentEra_ >= Era::BronzeAge || currentEpoch_ >= HistoricalEpoch::CopperAge;
         case BuildingType::Watchtower:
             return currentEra_ >= Era::IronAge;
     }

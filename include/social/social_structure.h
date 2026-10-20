@@ -31,6 +31,7 @@ struct Clan {
     int chiefId = -1;
     std::vector<int> memberIds;
     float cohesion = 100.0f; // Zusammenhalt
+    float politicsCooldown = 0.0f; // Globaler Politik-/Duell-Cooldown (mind. 150s)
 };
 
 struct Kingdom {
@@ -55,7 +56,10 @@ class SocialHierarchy {
 public:
     SocialHierarchy();
 
-    void InitDefaultClans();
+    void Update(float dt);
+
+    void InitClan(int clanId, const std::string& name, Color color);
+    void EnsureClanExists(int clanId, const std::string& defaultName = "Clan", Color defaultColor = WHITE);
     void AssignToClan(int characterId, int roleIndex, int preferredClanId = -1);
     void SetRank(int characterId, SocialRank rank);
     SocialRank GetRank(int characterId) const;
@@ -76,7 +80,10 @@ public:
 
     // Führung, Meuterei & Stammesspaltung (Schisma)
     int GetChiefId() const { return kingdom_.monarchId; }
-    void UpdateLeadership(const class RelationshipManager& rels, const std::vector<class Caveman>& cavemen, class EventLog& log);
+    int GetChiefIdForClan(int clanId) const;
+    void ElectLeader(std::vector<class Caveman>& cavemen, const class RelationshipManager& rels, class EventLog& log, Color clanColor, const std::string& clanName);
+    void UpdateLeadership(const class RelationshipManager& rels, std::vector<class Caveman>& cavemen, class EventLog& log, Color clanColor = WHITE, const std::string& clanName = "");
+    bool CheckLeadershipChallenge(class Tribe& tribe, std::vector<class Caveman>& cavemen, class EventLog& log);
     bool CheckForSchism(const class RelationshipManager& rels, const std::vector<class Caveman>& cavemen,
                         int& outRebelClanId, int& outRebelLeaderId);
     void RegisterSplinterSettlement(const SplinterSettlement& settlement);

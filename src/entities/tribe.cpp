@@ -8,6 +8,92 @@
 #include <algorithm>
 #include <cmath>
 
+Tribe::ProceduralClanInfo Tribe::GenerateProceduralClan(int id, Vector2 location, const World& world) {
+    int cx = World::ToTile(location.x);
+    int cy = World::ToTile(location.y);
+
+    int freshwaterTiles = 0;
+    int saltwaterTiles = 0;
+    int mountainTiles = 0;
+    int forestTiles = 0;
+    int meadowTiles = 0;
+
+    for (int dy = -10; dy <= 10; ++dy) {
+        for (int dx = -10; dx <= 10; ++dx) {
+            int tx = cx + dx;
+            int ty = cy + dy;
+            if (!world.IsInBounds(tx, ty)) continue;
+            const TileData& td = world.GetTileData(tx, ty);
+            if (td.waterType == WaterType::Freshwater || td.isRiver) freshwaterTiles++;
+            else if (td.waterType == WaterType::Saltwater) saltwaterTiles++;
+            if (td.heightLevel >= 3 || td.isCliff || td.type == TILE_MOUNTAIN) mountainTiles++;
+            if (td.type == TILE_FOREST) forestTiles++;
+            if (td.type == TILE_GRASS && td.heightLevel <= 2) meadowTiles++;
+        }
+    }
+
+    std::vector<std::string> prefixes;
+    if (freshwaterTiles >= 6) {
+        prefixes.push_back("Fluss");
+        prefixes.push_back("Strom");
+        prefixes.push_back("Schilf");
+        prefixes.push_back("Quell");
+        prefixes.push_back("Ufer");
+    }
+    if (saltwaterTiles >= 6) {
+        prefixes.push_back("Küsten");
+        prefixes.push_back("Gezeiten");
+        prefixes.push_back("Wellen");
+        prefixes.push_back("Sturm");
+        prefixes.push_back("Muschel");
+    }
+    if (mountainTiles >= 5) {
+        prefixes.push_back("Felsen");
+        prefixes.push_back("Klippen");
+        prefixes.push_back("Granit");
+        prefixes.push_back("Berg");
+        prefixes.push_back("Gipfel");
+        prefixes.push_back("Schluchten");
+    }
+    if (forestTiles >= 10) {
+        prefixes.push_back("Wald");
+        prefixes.push_back("Eichen");
+        prefixes.push_back("Schatten");
+        prefixes.push_back("Moos");
+        prefixes.push_back("Wurzel");
+    }
+    if (meadowTiles >= 20) {
+        prefixes.push_back("Sonnen");
+        prefixes.push_back("Steppen");
+        prefixes.push_back("Wiesen");
+        prefixes.push_back("Wind");
+        prefixes.push_back("Horizont");
+    }
+    prefixes.push_back("Bären");
+    prefixes.push_back("Wolfs");
+    prefixes.push_back("Raben");
+    prefixes.push_back("Falken");
+    prefixes.push_back("Hirsch");
+    prefixes.push_back("Otter");
+
+    static const char* kSuffixes[] = {
+        "sippe", "bund", "jäger", "wächter", "volk", "stamm", "orden", "läufer", "wanderer", "hüter"
+    };
+
+    uint32_t seedVal = (uint32_t)(id * 7919 + cx * 31 + cy * 17);
+    int pIdx = (int)(seedVal % (uint32_t)prefixes.size());
+    int sIdx = (int)((seedVal / 7) % (uint32_t)(sizeof(kSuffixes) / sizeof(kSuffixes[0])));
+
+    std::string clanName = prefixes[pIdx] + "-" + kSuffixes[sIdx];
+
+    // Prozedurale Farbpalette mit Goldenem Schnitt im HSV-Raum für maximale Farbdistanz
+    float goldenRatioConjugate = 0.618033988749895f;
+    float h = std::fmod((float)(id - 1) * goldenRatioConjugate * 360.0f + 25.0f, 360.0f);
+    Color clanColor = ColorFromHSV(h, 0.78f, 0.92f);
+
+    return { clanName, clanColor };
+}
+
 Tribe::Tribe(Vector2 campPosition) : campPos_(campPosition) {
     stock_.food       = cfg::kStartFood;
     stock_.cookedFood = 2;
@@ -28,11 +114,28 @@ void Tribe::InitWorld(const World& world) {
 }
 
 void Tribe::Update(const World& world, const std::vector<Caveman>& cavemen, int population, float dt, EventLog& log) {
+    hierarchy_.Update(dt);
     // 0. Gebäude-Tick: Brennstoffverbrauch der Feuerstellen & natürlicher Witterungsverschleiß
     bool isBadWeather = world.Env() &&
                         (world.Env()->GetWeather() == WeatherType::Rain ||
                          world.Env()->GetWeather() == WeatherType::Storm);
     buildings_.Update(dt, isBadWeather, stock_, log);
+
+    // 0b. Organische Clan-Konstituierung ("Bottom-Up")
+    if (!isFormed_) {
+        formationTimer_ += dt;
+        bool fireActive = buildings_.GetWarmthAt(campPos_) > 0.0f;
+        bool hasShelter = buildings_.GetBuildingCount(BuildingType::Hut, true) > 0;
+        int clanMembers = 0;
+        for (const auto& c : cavemen) {
+            if (c.IsAlive() && c.ClanId() == id_) clanMembers++;
+        }
+        if (formationTimer_ >= 10.0f || (formationTimer_ >= 3.0f && (fireActive || hasShelter || clanMembers >= 3))) {
+            isFormed_ = true;
+            log.Add(TextFormat("Die Ur-Gruppe am Lagerfeuer (%.0f, %.0f) hat sich feierlich als '%s' konstituiert!",
+                               campPos_.x, campPos_.y, name_.c_str()), factionColor_);
+        }
+    }
 
     // 1. POIs aktualisieren (Spawns nach Zeitfenstern & Entdeckung)
     pois_.Update(world, campPos_, age_.CurrentEra(), age_.EraElapsedTime(), cavemen, log);
@@ -83,8 +186,138 @@ void Tribe::Update(const World& world, const std::vector<Caveman>& cavemen, int 
         }
     }
 
-    // 6. Autonomer Siedlungsplaner (Stufe 1: Vollautonome Siedlungsentwicklung)
+    // 6. Strategische Expansionsziele nach Ressourcen-Defiziten ermitteln (Phase 3)
+    UpdateStrategicExpansionPlan(world);
+
+    // 7. Autonomer Siedlungsplaner (Stufe 1 & Phase 3: Zero-Player-Bauentwicklung)
     UpdateSettlementPlanner(world, cavemen, population, dt, log);
+
+    // 8. Territoriale Reichskapazität berechnen (Phase 1)
+    UpdateEmpireCapacity(cavemen);
+}
+
+void Tribe::UpdateStrategicExpansionPlan(const World& world) {
+    bool needWood = stock_.wood < 8;
+    bool needStone = stock_.stone < 6;
+    bool needFood = (stock_.food + stock_.cookedFood) < 10;
+
+    int cx = World::ToTile(campPos_.x);
+    int cy = World::ToTile(campPos_.y);
+
+    int bestX = -1, bestY = -1;
+    float bestScore = -1.0f;
+    std::string bestReason = "";
+
+    // Suche im Umkreis von 10 bis 35 Kacheln um das Camp nach Ressourcen/POIs außerhalb der Grenzen
+    for (int dy = -35; dy <= 35; ++dy) {
+        for (int dx = -35; dx <= 35; ++dx) {
+            int distSq = dx * dx + dy * dy;
+            if (distSq < 10 * 10 || distSq > 35 * 35) continue;
+
+            int tx = cx + dx, ty = cy + dy;
+            if (!world.IsInBounds(tx, ty)) continue;
+
+            const TileData& td = world.GetTileData(tx, ty);
+            if (td.ownerTribeId == id_) continue;
+            if (td.waterType != WaterType::None || td.type == TILE_DEEP_WATER ||
+                td.type == TILE_SHALLOW_WATER || td.isRiver || td.isCliff) {
+                continue;
+            }
+
+            float score = 0.0f;
+            std::string reason = "";
+
+            if (needWood && td.type == TILE_FOREST) {
+                score += 45.0f;
+                reason = "Holzvorkommen";
+            }
+            if (needStone && td.type == TILE_MOUNTAIN) {
+                score += 40.0f;
+                reason = "Steinbrüche";
+            }
+            if (needFood && world.IsNearFreshwater(tx, ty, 3)) {
+                score += 35.0f;
+                reason = "Süßwasser & Nahrung";
+            }
+
+            for (const auto& poi : pois_.All()) {
+                if (poi.spawned && poi.state != POIState::Explored) {
+                    float pd = Vector2Distance(World::TileCenter(tx, ty), poi.position);
+                    if (pd < 3.0f * TILE_SIZE) {
+                        score += 55.0f;
+                        reason = "POI-Entdeckung (" + std::string(poi.name) + ")";
+                        break;
+                    }
+                }
+            }
+
+            if (score > 0.0f) {
+                float dist = std::sqrt((float)distSq);
+                score -= dist * 0.45f;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestX = tx;
+                    bestY = ty;
+                    bestReason = reason;
+                }
+            }
+        }
+    }
+
+    if (bestScore > 5.0f) {
+        expansionTarget_.active = true;
+        expansionTarget_.position = World::TileCenter(bestX, bestY);
+        expansionTarget_.reason = bestReason;
+    } else {
+        expansionTarget_.active = false;
+    }
+}
+
+void Tribe::UpdateEmpireCapacity(const std::vector<Caveman>& cavemen) {
+    int tcTier = buildings_.GetMaxTier(BuildingType::TownCenter);
+    float baseCapacity = 52.0f; // Phase 3: TC Basis 45-60 Kacheln
+    if (tcTier == 2) baseCapacity = 78.0f;
+    else if (tcTier >= 3) baseCapacity = 115.0f;
+
+    int adultPop = 0;
+    float totalMorale = 0.0f;
+    int memberCount = 0;
+    for (const auto& c : cavemen) {
+        if (!c.IsAlive() || c.ClanId() != id_) continue;
+        memberCount++;
+        totalMorale += c.Morale();
+        if (c.AgeYears() >= 16.0f) {
+            adultPop++;
+        }
+    }
+    float avgMorale = (memberCount > 0) ? (totalMorale / (float)memberCount) : 50.0f;
+
+    int huts = buildings_.GetBuildingCount(BuildingType::Hut, true);
+    int workshops = buildings_.GetBuildingCount(BuildingType::CraftBench, true) +
+                    buildings_.GetBuildingCount(BuildingType::Kiln, true) +
+                    buildings_.GetBuildingCount(BuildingType::Pantry, true);
+    int farms = buildings_.GetBuildingCount(BuildingType::FarmPlot, true) +
+                buildings_.GetBuildingCount(BuildingType::AnimalPen, true);
+    int monuments = buildings_.GetBuildingCount(BuildingType::Monument, true);
+    int totems = buildings_.GetBuildingCount(BuildingType::BorderTotem, true);
+    int outposts = buildings_.GetBuildingCount(BuildingType::Outpost, true);
+    int watchtowers = buildings_.GetBuildingCount(BuildingType::Watchtower, true);
+
+    // Alle fertigen Gebäude fungieren als territoriale Anker und erweitern die Reichskapazität
+    float rawCapacity = baseCapacity + ((float)adultPop * 5.0f) +
+                        ((float)huts * 4.0f) + ((float)workshops * 5.0f) +
+                        ((float)farms * 6.0f) + ((float)monuments * 8.0f) +
+                        ((float)totems * 14.0f) + ((float)outposts * 24.0f) + ((float)watchtowers * 35.0f);
+
+    float moralFactor = std::clamp(0.60f + (avgMorale / 100.0f) * 0.65f, 0.60f, 1.25f);
+
+    float eraMultiplier = 1.0f;
+    if (age_.CurrentEra() == Era::BronzeAge) eraMultiplier = 1.35f;
+    else if (age_.CurrentEra() == Era::IronAge) eraMultiplier = 1.80f;
+
+    float finalCapacity = rawCapacity * moralFactor * eraMultiplier;
+    maxTerritoryCapacity_ = std::max(48, (int)std::round(finalCapacity));
 }
 
 bool Tribe::NeedsMoreHuts(int population) const {
@@ -102,13 +335,32 @@ ResourceCost Tribe::GetPlannedResourceDeficit() const {
 }
 
 bool Tribe::FindBuildingSpotAround(const World& world, Vector2 center, Vector2& out) const {
-    for (int attempt = 0; attempt < 110; ++attempt) {
+    for (int attempt = 0; attempt < 120; ++attempt) {
         const float angle = (float)GetRandomValue(0, 3600) / 3600.0f * 2.0f * PI;
-        const float radius = (float)GetRandomValue(3 * TILE_SIZE, 10 * TILE_SIZE);
+        const float radius = (float)GetRandomValue(3 * TILE_SIZE, 11 * TILE_SIZE);
         const Vector2 p = { center.x + std::cos(angle) * radius, center.y + std::sin(angle) * radius };
 
         if (!world.IsWalkable(p)) continue;
         if (Vector2Distance(p, StockpilePosition()) < 28.0f) continue;
+
+        // Phase 3: Gebäude dürfen nur im eigenen Territorium oder direkt am Grenzrand platziert werden
+        int tx = World::ToTile(p.x);
+        int ty = World::ToTile(p.y);
+        if (!world.IsInBounds(tx, ty)) continue;
+        int owner = world.GetOwnerTribeId(tx, ty);
+        if (owner != id_) {
+            bool bordersOwn = false;
+            static const int kDx[4] = { 1, -1, 0, 0 };
+            static const int kDy[4] = { 0, 0, 1, -1 };
+            for (int d = 0; d < 4; ++d) {
+                int nx = tx + kDx[d], ny = ty + kDy[d];
+                if (world.IsInBounds(nx, ny) && world.GetOwnerTribeId(nx, ny) == id_) {
+                    bordersOwn = true;
+                    break;
+                }
+            }
+            if (!bordersOwn) continue;
+        }
 
         bool blocked = false;
         for (const auto& b : buildings_.All()) {
@@ -132,8 +384,8 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
     if (plannerTimer_ < 2.5f) return;
     plannerTimer_ = 0.0f;
 
-    // Wenn bereits eine aktive Baustelle / Reparatur / Ausbau läuft, erst diese fertigbauen lassen
-    if (buildings_.FindActiveConstructionSite(campPos_) >= 0) {
+    // Phase 3: Wenn bereits eine Baustelle oder ein Gebäude-Ausbau im Gang ist, erst fertigstellen (kein Popup-Spam!)
+    if (buildings_.HasUnfinishedBuilding()) {
         planner_.active = false;
         return;
     }
@@ -288,6 +540,43 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
         }
     }
 
+    // Priorität 8 (Phase 3): Grenz-Totem / Außenposten zur strategischen Rohstoff-Expansion
+    if (!planner_.active && expansionTarget_.active) {
+        int maxAnchorsAllowed = (era >= Era::BronzeAge) ? 4 : 2;
+        int currentAnchors = buildings_.GetBuildingCount(BuildingType::BorderTotem, false) +
+                             buildings_.GetBuildingCount(BuildingType::Outpost, false);
+
+        if (currentAnchors < maxAnchorsAllowed) {
+            float minDistToAnchor = 99999.0f;
+            for (const auto& b : buildings_.All()) {
+                if (b.IsTerritoryAnchor()) {
+                    float d = Vector2Distance(b.position, expansionTarget_.position);
+                    if (d < minDistToAnchor) minDistToAnchor = d;
+                }
+            }
+
+            if (minDistToAnchor > 10.0f * TILE_SIZE) {
+                Vector2 dir = Vector2Subtract(expansionTarget_.position, campPos_);
+                float len = Vector2Length(dir);
+                if (len > 1.0f) {
+                    dir = Vector2Scale(dir, 1.0f / len);
+                    Vector2 totemCandidate = Vector2Add(campPos_, Vector2Scale(dir, 9.0f * TILE_SIZE));
+
+                    BuildingType bType = (era >= Era::BronzeAge) ? BuildingType::Outpost : BuildingType::BorderTotem;
+                    Building proto;
+                    proto.type = bType;
+                    proto.tier = 1;
+
+                    planner_.active = true;
+                    planner_.type = bType;
+                    planner_.buildCenter = totemCandidate;
+                    planner_.requiredCost = proto.GetBuildCost();
+                    planner_.description = TextFormat("%s (%s)", BuildingTypeName(bType, 1), expansionTarget_.reason.c_str());
+                }
+            }
+        }
+    }
+
     if (!planner_.active) return;
 
     // Prüfen, ob alle benötigten Baumaterialien im Lager vorhanden sind:
@@ -322,39 +611,7 @@ int Tribe::EnsureConstructionSite(const World& world, EventLog& log) {
     return buildings_.PlaceBuilding(nextType, spot, stock_, log);
 }
 
-void Tribe::DrawTerritoryOverlay(const World& world, float simTime) const {
-    float pulse = 0.85f + 0.15f * std::sin(simTime * 2.5f);
-
-    auto drawTerritoryZone = [&](Vector2 center, float radius, Color bannerColor, const char* title, const char* subtitle) {
-        int minTx = std::max(0, World::ToTile(center.x - radius));
-        int maxTx = std::min(world.Width() - 1, World::ToTile(center.x + radius));
-        int minTy = std::max(0, World::ToTile(center.y - radius));
-        int maxTy = std::min(world.Height() - 1, World::ToTile(center.y + radius));
-
-        for (int ty = minTy; ty <= maxTy; ++ty) {
-            for (int tx = minTx; tx <= maxTx; ++tx) {
-                Vector2 tileCenter = { (tx + 0.5f) * TILE_SIZE, (ty + 0.5f) * TILE_SIZE };
-                float d = Vector2Distance(center, tileCenter);
-                if (d <= radius) {
-                    bool isBorder = (d >= radius - (float)TILE_SIZE * 1.35f);
-                    float alpha = isBorder ? (0.34f * pulse) : 0.13f;
-                    DrawRectangle(tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE, Fade(bannerColor, alpha));
-                }
-            }
-        }
-
-        DrawCircleLines((int)center.x, (int)center.y, radius, Fade(bannerColor, 0.75f));
-        int tw = MeasureText(title, 10);
-        DrawRectangle((int)center.x - tw / 2 - 4, (int)(center.y - radius - 18.0f), tw + 8, 22, Fade(BLACK, 0.78f));
-        DrawRectangleLines((int)center.x - tw / 2 - 4, (int)(center.y - radius - 18.0f), tw + 8, 22, Fade(bannerColor, 0.9f));
-        DrawText(title, (int)center.x - tw / 2, (int)(center.y - radius - 16.0f), 10, bannerColor);
-        if (subtitle && subtitle[0] != '\0') {
-            int sw = MeasureText(subtitle, 8);
-            DrawText(subtitle, (int)center.x - sw / 2, (int)(center.y - radius - 6.0f), 8, LIGHTGRAY);
-        }
-    };
-
-    // 1. Haupt-Siedlungsterritorium (Farbe des regierenden Clans oder Faktion)
+void Tribe::DrawTerritoryOverlay(const World& world, float /*simTime*/) const {
     Color mainColor = factionColor_;
     int chiefId = hierarchy_.GetChiefId();
     if (chiefId >= 0) {
@@ -362,16 +619,54 @@ void Tribe::DrawTerritoryOverlay(const World& world, float simTime) const {
             mainColor = rulingClan->bannerColor;
         }
     }
-    float mainRadius = 120.0f + (float)buildings_.GetMaxTier(BuildingType::TownCenter) * 20.0f;
-    drawTerritoryZone(campPos_, mainRadius, mainColor,
-                      name_.c_str(),
-                      TextFormat("Hauptsiedlung (%s)", EraName(age_.CurrentEra())));
 
-    // 2. Territorien abgespaltener Clans / Fraktionen
-    for (const auto& s : hierarchy_.GetSplinterSettlements()) {
-        drawTerritoryZone(s.centerPos, s.territoryRadius, s.bannerColor,
-                          s.factionName.c_str(), "Unabhängiger Splitter-Stamm");
+    int w = world.Width();
+    int h = world.Height();
+
+    // Kachelgenaues Rendering der Grenzen (Phase 1.4):
+    // 1. Dezentes halbtransparentes Farb-Overlay (Alpha 40)
+    // 2. Scharfe 2.5px dicke Außenkanten an allen Grenzflächen
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const TileData& td = world.GetTileData(x, y);
+            if (td.ownerTribeId != id_) continue;
+            if (td.waterType != WaterType::None || td.type == TILE_DEEP_WATER ||
+                td.type == TILE_SHALLOW_WATER || td.isRiver) continue;
+
+            const float visualYOff = (float)td.heightLevel * ELEVATION_PIXEL_HEIGHT;
+            const float px = (float)(x * TILE_SIZE);
+            const float py = (float)(y * TILE_SIZE) - visualYOff;
+
+            // Kachel-Füllung
+            DrawRectangleRec({ px, py, (float)TILE_SIZE, (float)TILE_SIZE }, Fade(mainColor, 0.18f));
+
+            // Scharfe Kanten zu Nachbarkacheln mit anderem Besitzer
+            // Nord
+            if (y == 0 || world.GetTileData(x, y - 1).ownerTribeId != id_) {
+                DrawLineEx({ px, py }, { px + (float)TILE_SIZE, py }, 2.5f, mainColor);
+            }
+            // Süd
+            if (y == h - 1 || world.GetTileData(x, y + 1).ownerTribeId != id_) {
+                DrawLineEx({ px, py + (float)TILE_SIZE }, { px + (float)TILE_SIZE, py + (float)TILE_SIZE }, 2.5f, mainColor);
+            }
+            // West
+            if (x == 0 || world.GetTileData(x - 1, y).ownerTribeId != id_) {
+                DrawLineEx({ px, py }, { px, py + (float)TILE_SIZE }, 2.5f, mainColor);
+            }
+            // Ost
+            if (x == w - 1 || world.GetTileData(x + 1, y).ownerTribeId != id_) {
+                DrawLineEx({ px + (float)TILE_SIZE, py }, { px + (float)TILE_SIZE, py + (float)TILE_SIZE }, 2.5f, mainColor);
+            }
+        }
     }
+
+    // Zentriertes Territoriums-Banner über dem TownCenter (30px höher)
+    float campYOffset = world.GetVisualYOffset(campPos_);
+    Vector2 labelPos = { campPos_.x, campPos_.y - 62.0f + campYOffset };
+    int tw = MeasureText(name_.c_str(), 11);
+    DrawRectangle((int)labelPos.x - tw / 2 - 5, (int)labelPos.y - 4, tw + 10, 20, Fade(BLACK, 0.82f));
+    DrawRectangleLines((int)labelPos.x - tw / 2 - 5, (int)labelPos.y - 4, tw + 10, 20, mainColor);
+    DrawText(name_.c_str(), (int)labelPos.x - tw / 2, (int)labelPos.y, 11, mainColor);
 }
 
 void Tribe::Draw(float time, const World* world) const {

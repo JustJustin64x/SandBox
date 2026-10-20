@@ -91,7 +91,7 @@ constexpr int kStartChildren  = 2;
 constexpr int kTreeCount   = 80;
 constexpr int kBushCount   = 40;
 constexpr int kRockCount   = 28;
-constexpr int kAnimalCount = 14;
+constexpr int kAnimalCount = 36;
 
 // --- Wärme & Kälte ---------------------------------------------------------
 constexpr float kWarmthLossDay            = 0.3f;   // pro Sekunde tagsüber

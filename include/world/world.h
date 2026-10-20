@@ -30,6 +30,30 @@ struct TileProperty {
     bool isLiquid;
 };
 
+// Strategische Gewichtung von Ressourcen für organische Territorien-Expansion
+struct ResourceStrategicWeights {
+    float freshwater = 25.0f;
+    float forestWood = 20.0f;
+    float stoneMountain = 18.0f;
+    float berryFood = 22.0f;
+    float flatGrassland = 10.0f;
+    float poiDiscovery = 30.0f;
+    // Modular erweiterbare Gewichte für zukünftige Ressourcen:
+    float ironOre = 35.0f;
+    float copperOre = 30.0f;
+    float claySoil = 20.0f;
+    float fertileSoil = 25.0f;
+    float rareHerbs = 20.0f;
+    float goldDeposit = 45.0f;
+};
+
+// Kontaktzone & Grenzreibung zwischen zwei Clans (Phase 4)
+struct BorderContact {
+    int neighborTribeId = -1;
+    int sharedBorderTiles = 0;
+    std::vector<std::pair<int, int>> contactTiles;
+};
+
 // Vollständige Datenstruktur für jede Kachel (Phase 1: 3D-Höhenstufen, Hydrologie & Klippen)
 struct TileData {
     TileType type = TILE_DEEP_WATER;
@@ -44,6 +68,10 @@ struct TileData {
     uint8_t distanceToShore = 0;   // Abstand zum nächsten festen Ufer in Kacheln (per BFS berechnet)
     uint16_t regionId = 0;         // Zusammenhängende Land-/Flachwasser-Region für O(1) Erreichbarkeits-Checks
     bool hasCave = false;          // Natürlicher Höhleneingang in der Klippenwand
+
+    // Territorien-System (Phase 1)
+    int ownerTribeId = -1;         // -1 = neutrales/unbeanspruchtes Land, >= 0 = Clan-ID
+    float claimStrength = 0.0f;    // 0.0f bis 100.0f Kontrollstärke
 };
 
 class EnvironmentalSystem;
@@ -84,6 +112,22 @@ public:
     bool HasCave(int x, int y) const;
     bool IsNearFreshwater(int tx, int ty, int radius) const;
 
+    // --- Territorien & Kachel-Besitz (Phase 1) ------------------------------
+    int GetOwnerTribeId(int x, int y) const;
+    void SetOwnerTribeId(int x, int y, int tribeId);
+    float GetClaimStrength(int x, int y) const;
+    void SetClaimStrength(int x, int y, float strength);
+    void ModifyClaim(int x, int y, int tribeId, float delta);
+
+    float EvaluateTileStrategicValue(int x, int y, const ResourceStrategicWeights& weights = {}) const;
+    void InitStartingTerritory(int tribeId, Vector2 campPos, int tileCount = 20);
+    void UpdateTerritories(const std::vector<std::unique_ptr<class Tribe>>& tribes,
+                           const std::vector<class Caveman>& cavemen,
+                           float dt);
+    void CalculateTribeInfluenceField(const class Tribe& tribe, std::vector<float>& outInfluence) const;
+    void SmoothTerritoryBorders(int tribeId, const class Tribe* tribe = nullptr);
+    std::vector<BorderContact> GetBorderContacts(int tribeId) const;
+
     // 2.5D Stacked Elevation & Visual Projections (Phase 4)
     float GetVisualYOffset(Vector2 worldPos) const;
     bool GetTileAtRenderPos(Vector2 worldPos, int& outX, int& outY) const;
@@ -113,8 +157,8 @@ public:
     void UpdateRoads(float dt);
 
     // --- Pfadsuche (Phase 2 optimiert) ---------------------------------------
-    float GetMovementCost(int fromX, int fromY, int toX, int toY) const;
-    bool FindPath(Vector2 from, Vector2 to, std::vector<Vector2>& outPath) const;
+    float GetMovementCost(int fromX, int fromY, int toX, int toY, int actorTribeId = -1, bool ignoreTerritory = false) const;
+    bool FindPath(Vector2 from, Vector2 to, std::vector<Vector2>& outPath, int actorTribeId = -1, bool ignoreTerritory = false) const;
     bool HasLineOfSight(Vector2 a, Vector2 b) const;
 
     // --- Weltgenerierung (Phase 1) -------------------------------------------

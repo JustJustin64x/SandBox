@@ -43,13 +43,19 @@ void ResourceManager::Populate(const World& world, Vector2 campPos) {
     const float campClear = 5.0f * TILE_SIZE;
     auto farFromCamp = [&](Vector2 p, float minDist) { return Vector2Distance(p, campPos) >= minDist; };
 
-    // Bäume im Wald (Fallback: Gras)
+    // Bäume im Wald (Fallback: Gras) – keine Bäume auf Klippen oder Hochgebirge
     for (int i = 0; i < cfg::kTreeCount; ++i) {
         Vector2 p;
         bool ok = world.FindRandomTile([&](int x, int y) {
+            const TileData& td = world.GetTileData(x, y);
+            if (td.isCliff || td.heightLevel >= 3) return false;
             return world.GetTile(x, y) == TILE_FOREST && farFromCamp(World::TileCenter(x, y), campClear);
         }, p);
-        if (!ok) ok = world.FindRandomTile([&](int x, int y) { return world.GetTile(x, y) == TILE_GRASS; }, p);
+        if (!ok) ok = world.FindRandomTile([&](int x, int y) {
+            const TileData& td = world.GetTileData(x, y);
+            if (td.isCliff || td.heightLevel >= 3) return false;
+            return world.GetTile(x, y) == TILE_GRASS;
+        }, p);
         if (ok) SpawnNode(ResourceType::Tree, p);
     }
 
@@ -61,7 +67,11 @@ void ResourceManager::Populate(const World& world, Vector2 campPos) {
             ok = world.FindRandomWalkablePosition(campPos, 25.0f * TILE_SIZE, p, 60, TILE_GRASS) &&
                  farFromCamp(p, campClear);
         }
-        if (!ok) ok = world.FindRandomTile([&](int x, int y) { return world.GetTile(x, y) == TILE_GRASS; }, p);
+        if (!ok) ok = world.FindRandomTile([&](int x, int y) {
+            const TileData& td = world.GetTileData(x, y);
+            if (td.isCliff || td.heightLevel >= 3) return false;
+            return world.GetTile(x, y) == TILE_GRASS;
+        }, p);
         if (ok) SpawnNode(ResourceType::Bush, p);
     }
 
@@ -77,11 +87,14 @@ void ResourceManager::Populate(const World& world, Vector2 campPos) {
         if (ok) SpawnNode(ResourceType::Rock, p);
     }
 
-    // Wildtiere auf Gras, mit Abstand zum Lager
+    // Wildtiere auf flachem Gras oder Wald, mit Abstand zum Lager
     for (int i = 0; i < cfg::kAnimalCount; ++i) {
         Vector2 p;
         if (world.FindRandomTile([&](int x, int y) {
-                return world.GetTile(x, y) == TILE_GRASS && farFromCamp(World::TileCenter(x, y), 12.0f * TILE_SIZE);
+                const TileData& td = world.GetTileData(x, y);
+                if (td.isCliff || td.heightLevel >= 3) return false;
+                int t = world.GetTile(x, y);
+                return (t == TILE_GRASS || t == TILE_FOREST) && farFromCamp(World::TileCenter(x, y), 12.0f * TILE_SIZE);
             }, p)) {
             SpawnNode(ResourceType::Animal, p);
         }
@@ -112,12 +125,33 @@ bool ResourceManager::IsValidTarget(int index, unsigned int generation) const {
     return n && n->generation == generation && n->IsAvailable();
 }
 
-int ResourceManager::FindBest(ResourceType type, Vector2 from) const {
+int ResourceManager::FindBest(ResourceType type, Vector2 from, const World* world, int actorTribeId, bool allowNeutralGrenz, const std::function<bool(int)>& isBlacklisted) const {
     int best = -1;
     float bestScore = 0.0f;
     for (size_t i = 0; i < nodes_.size(); ++i) {
         const ResourceNode& n = nodes_[i];
         if (n.type != type || !n.IsAvailable()) continue;
+        if (isBlacklisted && isBlacklisted((int)i)) continue;
+
+        // Territoriale Beschränkung (Phase 2):
+        if (world && actorTribeId >= 0) {
+            int tx = World::ToTile(n.position.x);
+            int ty = World::ToTile(n.position.y);
+            int ownerId = world->GetOwnerTribeId(tx, ty);
+
+            // Fremdes Clan-Territorium ist für friedliche Alltagsarbeit strikt tabu!
+            if (ownerId >= 0 && ownerId != actorTribeId) continue;
+
+            // Neutrales Land:
+            if (ownerId == -1) {
+                // Wildtiere dürfen in neutralem Land gejagt werden.
+                // Rohstoffe (Holz/Stein/Beeren) nur bei Mangel oder Grenz-Pionieren:
+                if (type != ResourceType::Animal && !allowNeutralGrenz) {
+                    continue;
+                }
+            }
+        }
+
         // Distanz, bestraft durch bereits zugewiesene Arbeiter -> verteilt die Leute
         const float score = Vector2Distance(from, n.position) * (1.0f + 0.75f * (float)n.claims);
         if (best < 0 || score < bestScore) {
@@ -270,7 +304,8 @@ void ResourceManager::UpdateAnimal(ResourceNode& n, const World& world, Vector2 
 void ResourceManager::RespawnAnimal(ResourceNode& n, const World& world, Vector2 campPos) {
     Vector2 p;
     if (!world.FindRandomTile([&](int x, int y) {
-            return world.GetTile(x, y) == TILE_GRASS &&
+            int t = world.GetTile(x, y);
+            return (t == TILE_GRASS || t == TILE_FOREST) &&
                    Vector2Distance(World::TileCenter(x, y), campPos) >= 15.0f * TILE_SIZE;
         }, p)) {
         n.respawnTimer = 5.0f;   // später erneut versuchen

@@ -1,5 +1,7 @@
 #include "world/world.h"
 #include "world/environmental_system.h"
+#include "entities/tribe.h"
+#include "entities/caveman.h"
 
 #include <algorithm>
 #include <cmath>
@@ -89,24 +91,24 @@ void World::Generate(unsigned int seed) {
             size_t idx = (size_t)(y * width_ + x);
             TileData& td = tiles_[idx];
 
-            // Domain Warping für organische, fraktale Küstenlinien
-            float qx = FractalNoise((float)x * 0.024f, (float)y * 0.024f, seed + 101u, 3);
-            float qy = FractalNoise((float)x * 0.024f + 5.2f, (float)y * 0.024f + 1.3f, seed + 202u, 3);
+            // Domain Warping für organische, weitläufige Küstenlinien (skaliert für 240x160)
+            float qx = FractalNoise((float)x * 0.016f, (float)y * 0.016f, seed + 101u, 3);
+            float qy = FractalNoise((float)x * 0.016f + 5.2f, (float)y * 0.016f + 1.3f, seed + 202u, 3);
 
-            float elevNoise = FractalNoise((float)x * 0.028f + 3.2f * qx,
-                                           (float)y * 0.028f + 3.2f * qy,
+            float elevNoise = FractalNoise((float)x * 0.018f + 3.2f * qx,
+                                           (float)y * 0.018f + 3.2f * qy,
                                            seed, 5);
 
             // Sanfter Randabfall zum Kartenrand hin (offener Ozean)
-            float edgeDistX = std::min(x, width_ - 1 - x) / ((float)width_ * 0.12f);
-            float edgeDistY = std::min(y, height_ - 1 - y) / ((float)height_ * 0.12f);
+            float edgeDistX = std::min(x, width_ - 1 - x) / ((float)width_ * 0.09f);
+            float edgeDistY = std::min(y, height_ - 1 - y) / ((float)height_ * 0.09f);
             float edgeFalloff = std::clamp(std::min(edgeDistX, edgeDistY), 0.0f, 1.0f);
 
             // Elliptische Distanz zur Mitte für große Kontinentalmasse + vorgelagerte Inseln
             float dx = ((float)x - cx) / cx;
             float dy = ((float)y - cy) / cy;
             float centerDist = std::sqrt(dx * dx + dy * dy);
-            float continentMask = 1.0f - std::clamp(centerDist * 0.85f, 0.0f, 1.0f);
+            float continentMask = 1.0f - std::clamp(centerDist * 0.82f, 0.0f, 1.0f);
 
             // Kombinierte stetige Höhe (Elevation 0.0f .. 1.0f)
             float elevation = elevNoise * 0.65f + continentMask * 0.35f;
@@ -114,7 +116,7 @@ void World::Generate(unsigned int seed) {
             elevation = std::clamp(elevation, 0.0f, 1.0f);
 
             // Feuchtigkeitskarte (Moisture 0.0f .. 1.0f)
-            float moisture = FractalNoise((float)x * 0.032f, (float)y * 0.032f, seed + 7919u, 4);
+            float moisture = FractalNoise((float)x * 0.021f, (float)y * 0.021f, seed + 7919u, 4);
 
             td.elevation = elevation;
             td.moisture = moisture;
@@ -134,25 +136,25 @@ void World::Generate(unsigned int seed) {
             } else if (elevation < 0.48f) {
                 td.heightLevel = 0;
                 td.type = TILE_SAND;
-            } else if (elevation < 0.64f) {
+            } else if (elevation < 0.62f) {
                 td.heightLevel = 1; // Flachland
                 td.type = (moisture > 0.52f) ? TILE_FOREST : TILE_GRASS;
-            } else if (elevation < 0.76f) {
+            } else if (elevation < 0.74f) {
                 td.heightLevel = 2; // Hügel & Hochland
                 if (moisture > 0.60f) td.type = TILE_FOREST;
                 else if (moisture < 0.32f) td.type = TILE_MOUNTAIN;
                 else td.type = TILE_GRASS;
-            } else if (elevation < 0.84f) {
-                td.heightLevel = 3; // Untere Gebirgsstufe
+            } else if (elevation < 0.83f) {
+                td.heightLevel = 3; // Untere Gebirgsstufe (Fels)
                 td.type = TILE_MOUNTAIN;
             } else if (elevation < 0.90f) {
-                td.heightLevel = 4; // Mittlere Gebirgsstufe
+                td.heightLevel = 4; // Mittlere Gebirgsstufe (Fels)
                 td.type = TILE_MOUNTAIN;
             } else if (elevation < 0.95f) {
-                td.heightLevel = 5; // Hohe Felsgipfel
+                td.heightLevel = 5; // Hohe Felsgipfel (Fels)
                 td.type = TILE_MOUNTAIN;
             } else {
-                td.heightLevel = 6; // Schneegipfel
+                td.heightLevel = 5; // Schneegipfel (Stufe 5)
                 td.type = TILE_SNOW;
             }
         }
@@ -161,8 +163,33 @@ void World::Generate(unsigned int seed) {
     // 1.2 Hydrologie: Strikte Trennung von Salzwasser und Süßwasser-Seen
     ClassifyWaterAndHydrology();
 
-    // 1.3 Süßwasser-Flüsse von Bergen ins Meer/Seen modellieren
+    // 1.3 Süßwasser-Flüsse von Bergen ins Meer/Seen modellieren (orthogonal 2 Kacheln breit)
     GenerateRivers(seed);
+
+    // 1.3b Phase 4: Sand nur an echten Meeresküsten (Salzwasser) – Binnenland & Flussauen begrünen
+    for (int y = 0; y < height_; ++y) {
+        for (int x = 0; x < width_; ++x) {
+            size_t idx = (size_t)(y * width_ + x);
+            TileData& td = tiles_[idx];
+            if (td.type == TILE_SAND) {
+                bool bordersSaltwater = false;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        int nx = x + dx, ny = y + dy;
+                        if (IsInBounds(nx, ny) && tiles_[(size_t)(ny * width_ + nx)].waterType == WaterType::Saltwater) {
+                            bordersSaltwater = true;
+                            break;
+                        }
+                    }
+                    if (bordersSaltwater) break;
+                }
+                if (!bordersSaltwater) {
+                    td.type = (td.moisture > 0.45f) ? TILE_FOREST : TILE_GRASS;
+                    if (td.heightLevel == 0) td.heightLevel = 1;
+                }
+            }
+        }
+    }
 
     // 1.4 Ufer-Distanz-Berechnung (distanceToShore per BFS)
     CalculateDistanceToShore();
@@ -298,13 +325,40 @@ void World::GenerateRivers(unsigned int seed) {
         }
     }
 
-    static const int kDx8[8] = { 1, -1, 0, 0, 1, 1, -1, -1 };
-    static const int kDy8[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
+    // Phase 4: Strikte 4-orthogonale Richtungen für ruhigen, natürlichen Flusslauf (kein diagonales Zickzack)
+    static const int kDx4[4] = { 1, -1, 0, 0 };
+    static const int kDy4[4] = { 0, 0, 1, -1 };
+
+    auto carveRiverTile = [this](int x, int y, Vector2 flowDir) {
+        if (!IsInBounds(x, y)) return;
+        TileData& td = tiles_[(size_t)(y * width_ + x)];
+        if (td.waterType == WaterType::Saltwater) return;
+        td.type = TILE_SHALLOW_WATER;
+        td.waterType = WaterType::Freshwater;
+        td.isRiver = true;
+        td.heightLevel = 0;
+        td.isCliff = false;
+        td.flowDirection = flowDir;
+
+        // Uferkacheln um den Fluss von Wüstensand befreien (saftige Auen/Gras)
+        static const int kBankDx[8] = { 1, -1, 0, 0, 1, 1, -1, -1 };
+        static const int kBankDy[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
+        for (int b = 0; b < 8; ++b) {
+            int bx = x + kBankDx[b], by = y + kBankDy[b];
+            if (IsInBounds(bx, by)) {
+                TileData& btd = tiles_[(size_t)(by * width_ + bx)];
+                if (btd.waterType == WaterType::None && btd.type == TILE_SAND) {
+                    btd.type = (btd.moisture > 0.45f) ? TILE_FOREST : TILE_GRASS;
+                    if (btd.heightLevel == 0) btd.heightLevel = 1;
+                }
+            }
+        }
+    };
 
     for (const auto& spring : activeSprings) {
         int curX = spring.first;
         int curY = spring.second;
-        int maxSteps = 220;
+        int maxSteps = 240;
 
         while (maxSteps-- > 0) {
             size_t curIdx = (size_t)(curY * width_ + curX);
@@ -312,23 +366,17 @@ void World::GenerateRivers(unsigned int seed) {
 
             // Wenn wir Ozean oder einen See erreichen, mündet der Fluss
             if (curTd.waterType == WaterType::Saltwater ||
-                (curTd.waterType == WaterType::Freshwater && !curTd.isRiver && maxSteps < 210)) {
+                (curTd.waterType == WaterType::Freshwater && !curTd.isRiver && maxSteps < 230)) {
                 break;
             }
 
-            // Flusskachel anlegen
-            curTd.type = TILE_SHALLOW_WATER;
-            curTd.waterType = WaterType::Freshwater;
-            curTd.isRiver = true;
-            curTd.heightLevel = 0; // Flusstal auf Wasserebene
-
-            // Nächste Kachel per Downhill-Gradient mit leichtem Rauschen suchen
+            // Nächste Kachel per orthogonalem Downhill-Gradient suchen
             int bestX = -1, bestY = -1;
             float lowestElev = curTd.elevation;
 
-            for (int i = 0; i < 8; ++i) {
-                int nx = curX + kDx8[i];
-                int ny = curY + kDy8[i];
+            for (int i = 0; i < 4; ++i) {
+                int nx = curX + kDx4[i];
+                int ny = curY + kDy4[i];
                 if (!IsInBounds(nx, ny)) continue;
 
                 float noiseOffset = (float)(rng() % 100) / 100.0f * 0.015f;
@@ -341,13 +389,19 @@ void World::GenerateRivers(unsigned int seed) {
             }
 
             if (bestX == -1 || (bestX == curX && bestY == curY)) {
-                // Lokale Senke: Zu einem See machen
+                // Lokale Senke: Fluss mündet / endet
                 break;
             }
 
-            Vector2 dir = { (float)(bestX - curX), (float)(bestY - curY) };
-            float len = Vector2Length(dir);
-            if (len > 0.001f) curTd.flowDirection = Vector2Scale(dir, 1.0f / len);
+            Vector2 flowDir = { (float)(bestX - curX), (float)(bestY - curY) };
+            float len = Vector2Length(flowDir);
+            if (len > 0.001f) flowDir = Vector2Scale(flowDir, 1.0f / len);
+
+            // 2 Kacheln breites Flussbett (Hauptkachel + orthogonale Flanke)
+            carveRiverTile(curX, curY, flowDir);
+            int flankX = curX - (bestY - curY);
+            int flankY = curY + (bestX - curX);
+            carveRiverTile(flankX, flankY, flowDir);
 
             curX = bestX;
             curY = bestY;
@@ -654,6 +708,438 @@ bool World::IsNearFreshwater(int tx, int ty, int radius) const {
     return false;
 }
 
+int World::GetOwnerTribeId(int x, int y) const {
+    if (!IsInBounds(x, y)) return -1;
+    return tiles_[(size_t)(y * width_ + x)].ownerTribeId;
+}
+
+void World::SetOwnerTribeId(int x, int y, int tribeId) {
+    if (!IsInBounds(x, y)) return;
+    tiles_[(size_t)(y * width_ + x)].ownerTribeId = tribeId;
+}
+
+float World::GetClaimStrength(int x, int y) const {
+    if (!IsInBounds(x, y)) return 0.0f;
+    return tiles_[(size_t)(y * width_ + x)].claimStrength;
+}
+
+void World::SetClaimStrength(int x, int y, float strength) {
+    if (!IsInBounds(x, y)) return;
+    tiles_[(size_t)(y * width_ + x)].claimStrength = std::clamp(strength, 0.0f, 100.0f);
+}
+
+void World::ModifyClaim(int x, int y, int tribeId, float delta) {
+    if (!IsInBounds(x, y)) return;
+    TileData& td = tiles_[(size_t)(y * width_ + x)];
+    if (td.ownerTribeId == tribeId) {
+        td.claimStrength = std::clamp(td.claimStrength + delta, 0.0f, 100.0f);
+        if (td.claimStrength <= 0.0f) {
+            td.ownerTribeId = -1;
+            td.claimStrength = 0.0f;
+        }
+    } else if (td.ownerTribeId == -1) {
+        if (delta > 0.0f) {
+            td.ownerTribeId = tribeId;
+            td.claimStrength = std::clamp(delta, 0.0f, 100.0f);
+        }
+    } else {
+        // Fremdes Territorium: Erst gegnerischen Anspruch reduzieren
+        td.claimStrength -= delta;
+        if (td.claimStrength <= 0.0f) {
+            td.ownerTribeId = tribeId;
+            td.claimStrength = std::max(20.0f, std::clamp(-td.claimStrength, 0.0f, 100.0f));
+        }
+    }
+}
+
+float World::EvaluateTileStrategicValue(int x, int y, const ResourceStrategicWeights& weights) const {
+    if (!IsInBounds(x, y)) return -100.0f;
+    const TileData& td = tiles_[(size_t)(y * width_ + x)];
+
+    if (td.isCliff || td.type == TILE_DEEP_WATER) return -50.0f;
+
+    float score = 0.0f;
+
+    // 1. Terrain-Eigenwert
+    if (td.type == TILE_GRASS && td.heightLevel <= 2) score += weights.flatGrassland;
+    if (td.type == TILE_FOREST) score += weights.forestWood;
+    if (td.type == TILE_MOUNTAIN || td.heightLevel >= 3) score += weights.stoneMountain;
+    if (td.hasCave) score += weights.poiDiscovery;
+
+    // 2. Umfeld-Scoring (Radius 3 Kacheln)
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+            int nx = x + dx, ny = y + dy;
+            if (!IsInBounds(nx, ny)) continue;
+            const TileData& ntd = tiles_[(size_t)(ny * width_ + nx)];
+            int dist = std::max(std::abs(dx), std::abs(dy));
+            float invDist = 1.0f / (float)dist;
+
+            if (ntd.waterType == WaterType::Freshwater || ntd.isRiver) {
+                score += weights.freshwater * invDist * 0.45f;
+            }
+            if (ntd.type == TILE_FOREST) {
+                score += weights.forestWood * invDist * 0.30f;
+            }
+            if (ntd.type == TILE_MOUNTAIN) {
+                score += weights.stoneMountain * invDist * 0.25f;
+            }
+            if (ntd.hasCave) {
+                score += weights.poiDiscovery * invDist * 0.55f;
+            }
+        }
+    }
+
+    return score;
+}
+
+void World::InitStartingTerritory(int tribeId, Vector2 campPos, int tileCount) {
+    int cx = ToTile(campPos.x);
+    int cy = ToTile(campPos.y);
+
+    struct Candidate {
+        int x, y;
+        float dist;
+    };
+    std::vector<Candidate> queue;
+
+    for (int dy = -8; dy <= 8; ++dy) {
+        for (int dx = -8; dx <= 8; ++dx) {
+            int tx = cx + dx, ty = cy + dy;
+            if (!IsInBounds(tx, ty)) continue;
+            const TileData& td = tiles_[(size_t)(ty * width_ + tx)];
+            if (td.isCliff || td.waterType != WaterType::None ||
+                td.type == TILE_DEEP_WATER || td.type == TILE_SHALLOW_WATER || td.isRiver) continue;
+            float d = std::sqrt((float)(dx * dx + dy * dy));
+            float noise = (float)((tx * 13 + ty * 37) % 7) * 0.25f;
+            queue.push_back({ tx, ty, d + noise });
+        }
+    }
+
+    std::sort(queue.begin(), queue.end(), [](const Candidate& a, const Candidate& b) {
+        return a.dist < b.dist;
+    });
+
+    int claimed = 0;
+    for (const auto& c : queue) {
+        TileData& td = tiles_[(size_t)(c.y * width_ + c.x)];
+        td.ownerTribeId = tribeId;
+        td.claimStrength = 100.0f;
+        claimed++;
+        if (claimed >= tileCount) break;
+    }
+}
+
+void World::CalculateTribeInfluenceField(const Tribe& tribe, std::vector<float>& outInfluence) const {
+    outInfluence.assign((size_t)(width_ * height_), 0.0f);
+    int tribeId = tribe.Id();
+
+    bool hasExpansionTarget = tribe.GetExpansionTarget().active;
+    int targetTx = hasExpansionTarget ? ToTile(tribe.GetExpansionTarget().position.x) : 0;
+    int targetTy = hasExpansionTarget ? ToTile(tribe.GetExpansionTarget().position.y) : 0;
+
+    struct QItem {
+        int x, y;
+        float dist;
+        bool operator>(const QItem& o) const { return dist > o.dist; }
+    };
+
+    const auto& buildings = tribe.Buildings().All();
+    std::vector<float> localDist;
+
+    for (const auto& b : buildings) {
+        if (!b.IsTerritoryAnchor()) continue;
+
+        float maxRadius = b.GetAnchorRadius();
+        float basePower = b.GetInfluencePower();
+        if (maxRadius <= 0.0f || basePower <= 0.0f) continue;
+
+        int ax = ToTile(b.position.x);
+        int ay = ToTile(b.position.y);
+        if (!IsInBounds(ax, ay)) continue;
+
+        int rInt = (int)std::ceil(maxRadius) + 1;
+        int minX = std::max(0, ax - rInt);
+        int maxX = std::min(width_ - 1, ax + rInt);
+        int minY = std::max(0, ay - rInt);
+        int maxY = std::min(height_ - 1, ay + rInt);
+
+        localDist.assign((size_t)(width_ * height_), 99999.0f);
+        std::priority_queue<QItem, std::vector<QItem>, std::greater<QItem>> pq;
+
+        localDist[(size_t)(ay * width_ + ax)] = 0.0f;
+        pq.push({ ax, ay, 0.0f });
+
+        while (!pq.empty()) {
+            QItem cur = pq.top();
+            pq.pop();
+
+            if (cur.dist > localDist[(size_t)(cur.y * width_ + cur.x)]) continue;
+            if (cur.dist > maxRadius) continue;
+
+            float power = basePower * (1.0f - (cur.dist / maxRadius));
+            size_t idx = (size_t)(cur.y * width_ + cur.x);
+            outInfluence[idx] = std::max(outInfluence[idx], power);
+
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (dx == 0 && dy == 0) continue;
+                    int nx = cur.x + dx, ny = cur.y + dy;
+                    if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
+
+                    const TileData& ntd = tiles_[(size_t)(ny * width_ + nx)];
+                    if (ntd.waterType != WaterType::None || ntd.type == TILE_DEEP_WATER ||
+                        ntd.type == TILE_SHALLOW_WATER || ntd.isRiver) {
+                        continue;
+                    }
+                    if (ntd.isCliff) continue;
+
+                    float resistance = 1.0f;
+                    if (ntd.type == TILE_FOREST || ntd.type == TILE_MOUNTAIN) resistance = 1.30f;
+                    if (ntd.isRamp) resistance = 2.2f;
+
+                    const TileData& ctd = tiles_[(size_t)(cur.y * width_ + cur.x)];
+                    int heightDiff = std::abs((int)ntd.heightLevel - (int)ctd.heightLevel);
+                    if (heightDiff >= 1 && !ntd.isRamp && !ctd.isRamp) {
+                        resistance = 7.0f;
+                    }
+
+                    int friendlyNeighbors = 0;
+                    static const int kOrtDx[4] = { 1, -1, 0, 0 };
+                    static const int kOrtDy[4] = { 0, 0, 1, -1 };
+                    for (int i = 0; i < 4; ++i) {
+                        int ox = nx + kOrtDx[i], oy = ny + kOrtDy[i];
+                        if (IsInBounds(ox, oy) && tiles_[(size_t)(oy * width_ + ox)].ownerTribeId == tribeId) {
+                            friendlyNeighbors++;
+                        }
+                    }
+                    if (friendlyNeighbors <= 1) {
+                        resistance += 1.6f;
+                    } else if (friendlyNeighbors >= 3) {
+                        resistance = std::max(0.7f, resistance - 0.25f);
+                    }
+
+                    // Direktionale Ausrichtung (Phase 3): 0.75x Widerstand in Richtung des strategischen Bedarfs
+                    if (hasExpansionTarget) {
+                        float curTargDist = std::hypot((float)(targetTx - cur.x), (float)(targetTy - cur.y));
+                        float nextTargDist = std::hypot((float)(targetTx - nx), (float)(targetTy - ny));
+                        if (nextTargDist < curTargDist) {
+                            resistance *= 0.75f;
+                        }
+                    }
+
+                    float stepDist = (dx != 0 && dy != 0) ? 1.414f : 1.0f;
+                    float nextDist = cur.dist + stepDist * resistance;
+
+                    if (nextDist <= maxRadius && nextDist < localDist[(size_t)(ny * width_ + nx)]) {
+                        localDist[(size_t)(ny * width_ + nx)] = nextDist;
+                        pq.push({ nx, ny, nextDist });
+                    }
+                }
+            }
+        }
+    }
+}
+
+void World::SmoothTerritoryBorders(int tribeId, const Tribe* tribe) {
+    static const int kDx[4] = { 1, -1, 0, 0 };
+    static const int kDy[4] = { 0, 0, 1, -1 };
+
+    std::vector<std::pair<int, int>> toAdd;
+    std::vector<std::pair<int, int>> toRemove;
+
+    for (int y = 0; y < height_; ++y) {
+        for (int x = 0; x < width_; ++x) {
+            const TileData& td = tiles_[(size_t)(y * width_ + x)];
+
+            if (td.waterType != WaterType::None || td.type == TILE_DEEP_WATER ||
+                td.type == TILE_SHALLOW_WATER || td.isRiver || td.isCliff) {
+                continue;
+            }
+
+            int friendlyNeighbors = 0;
+            for (int i = 0; i < 4; ++i) {
+                int nx = x + kDx[i], ny = y + kDy[i];
+                if (IsInBounds(nx, ny) && tiles_[(size_t)(ny * width_ + nx)].ownerTribeId == tribeId) {
+                    friendlyNeighbors++;
+                }
+            }
+
+            if (td.ownerTribeId == -1 && friendlyNeighbors >= 3) {
+                toAdd.push_back({ x, y });
+            } else if (td.ownerTribeId == tribeId && friendlyNeighbors <= 1) {
+                bool isAnchorTile = false;
+                if (tribe) {
+                    for (const auto& b : tribe->Buildings().All()) {
+                        if (b.IsTerritoryAnchor()) {
+                            if (ToTile(b.position.x) == x && ToTile(b.position.y) == y) {
+                                isAnchorTile = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!isAnchorTile) {
+                    toRemove.push_back({ x, y });
+                }
+            }
+        }
+    }
+
+    for (const auto& p : toAdd) {
+        TileData& td = tiles_[(size_t)(p.second * width_ + p.first)];
+        td.ownerTribeId = tribeId;
+        td.claimStrength = 60.0f;
+    }
+    for (const auto& p : toRemove) {
+        TileData& td = tiles_[(size_t)(p.second * width_ + p.first)];
+        td.ownerTribeId = -1;
+        td.claimStrength = 0.0f;
+    }
+}
+
+void World::UpdateTerritories(const std::vector<std::unique_ptr<Tribe>>& tribes,
+                              const std::vector<Caveman>& cavemen,
+                              float dt) {
+    if (tribes.empty()) return;
+
+    static float territoryTimer = 0.0f;
+    territoryTimer += dt;
+    if (territoryTimer < 1.5f) return;
+    territoryTimer = 0.0f;
+
+    // 1. Reichskapazität aller Clans aktualisieren
+    for (const auto& tr : tribes) {
+        tr->UpdateEmpireCapacity(cavemen);
+    }
+
+    // 2. Multi-Source Dijkstra Einflussfelder berechnen
+    std::vector<std::vector<float>> tribeInfluences(tribes.size());
+    for (size_t i = 0; i < tribes.size(); ++i) {
+        CalculateTribeInfluenceField(*tribes[i], tribeInfluences[i]);
+    }
+
+    // 3. Wasser- und Klippenkacheln neutral halten
+    for (int y = 0; y < height_; ++y) {
+        for (int x = 0; x < width_; ++x) {
+            TileData& td = tiles_[(size_t)(y * width_ + x)];
+            if (td.waterType != WaterType::None || td.type == TILE_DEEP_WATER ||
+                td.type == TILE_SHALLOW_WATER || td.isRiver || td.isCliff) {
+                td.ownerTribeId = -1;
+                td.claimStrength = 0.0f;
+            }
+        }
+    }
+
+    // 4. Beanspruchungskandidaten nach höchster Einflussstärke ermitteln
+    struct TileClaim {
+        int x, y;
+        float power;
+    };
+    std::vector<std::vector<TileClaim>> candidates(tribes.size());
+
+    for (int y = 0; y < height_; ++y) {
+        for (int x = 0; x < width_; ++x) {
+            TileData& td = tiles_[(size_t)(y * width_ + x)];
+            if (td.waterType != WaterType::None || td.type == TILE_DEEP_WATER ||
+                td.type == TILE_SHALLOW_WATER || td.isRiver || td.isCliff) {
+                continue;
+            }
+
+            int bestTribeIdx = -1;
+            float bestPower = 6.0f;
+
+            for (size_t i = 0; i < tribes.size(); ++i) {
+                float inf = tribeInfluences[i][(size_t)(y * width_ + x)];
+                if (inf > bestPower) {
+                    bestPower = inf;
+                    bestTribeIdx = (int)i;
+                }
+            }
+
+            if (bestTribeIdx >= 0) {
+                candidates[(size_t)bestTribeIdx].push_back({ x, y, bestPower });
+            }
+        }
+    }
+
+    // 5. Reichskapazität & Outside-In Retraction anwenden
+    std::vector<int> newOwners((size_t)(width_ * height_), -1);
+    std::vector<float> newStrengths((size_t)(width_ * height_), 0.0f);
+
+    for (size_t i = 0; i < tribes.size(); ++i) {
+        int maxCapacity = tribes[i]->MaxTerritoryCapacity();
+        auto& list = candidates[i];
+
+        // Sortieren nach absteigender Stärke: Kernbereich bleibt sicher, Ränder verfallen bei Überkapazität
+        std::sort(list.begin(), list.end(), [](const TileClaim& a, const TileClaim& b) {
+            return a.power > b.power;
+        });
+
+        int claimCount = std::min((int)list.size(), maxCapacity);
+        for (int c = 0; c < claimCount; ++c) {
+            size_t idx = (size_t)(list[c].y * width_ + list[c].x);
+            newOwners[idx] = tribes[i]->Id();
+            newStrengths[idx] = std::clamp(list[c].power, 15.0f, 100.0f);
+        }
+        tribes[i]->SetCurrentTerritoryCount(claimCount);
+    }
+
+    for (size_t idx = 0; idx < (size_t)(width_ * height_); ++idx) {
+        tiles_[idx].ownerTribeId = newOwners[idx];
+        tiles_[idx].claimStrength = newStrengths[idx];
+    }
+
+    // 6. Glättung & Loch-Auffüllung (Cellular Automata)
+    for (size_t i = 0; i < tribes.size(); ++i) {
+        SmoothTerritoryBorders(tribes[i]->Id(), tribes[i].get());
+    }
+
+    // Kacheln nach Glättung final zählen
+    for (size_t i = 0; i < tribes.size(); ++i) {
+        int count = 0;
+        int tId = tribes[i]->Id();
+        for (const auto& td : tiles_) {
+            if (td.ownerTribeId == tId) count++;
+        }
+        tribes[i]->SetCurrentTerritoryCount(count);
+    }
+}
+
+std::vector<BorderContact> World::GetBorderContacts(int tribeId) const {
+    std::unordered_map<int, BorderContact> contactMap;
+    static const int kDx[4] = { 1, -1, 0, 0 };
+    static const int kDy[4] = { 0, 0, 1, -1 };
+
+    for (int y = 0; y < height_; ++y) {
+        for (int x = 0; x < width_; ++x) {
+            const TileData& td = tiles_[(size_t)(y * width_ + x)];
+            if (td.ownerTribeId != tribeId) continue;
+
+            for (int i = 0; i < 4; ++i) {
+                int nx = x + kDx[i], ny = y + kDy[i];
+                if (!IsInBounds(nx, ny)) continue;
+                const TileData& ntd = tiles_[(size_t)(ny * width_ + nx)];
+                if (ntd.ownerTribeId >= 0 && ntd.ownerTribeId != tribeId) {
+                    BorderContact& bc = contactMap[ntd.ownerTribeId];
+                    bc.neighborTribeId = ntd.ownerTribeId;
+                    bc.sharedBorderTiles++;
+                    if (bc.contactTiles.size() < 24) {
+                        bc.contactTiles.push_back({ nx, ny });
+                    }
+                }
+            }
+        }
+    }
+
+    std::vector<BorderContact> result;
+    for (auto& pair : contactMap) {
+        result.push_back(std::move(pair.second));
+    }
+    return result;
+}
+
 bool World::IsWalkableTile(int x, int y) const {
     if (!IsInBounds(x, y)) return false;
     const TileData& td = tiles_[(size_t)(y * width_ + x)];
@@ -679,6 +1165,9 @@ bool World::CanTraverseBetween(int fromX, int fromY, int toX, int toY) const {
     if (!IsInBounds(fromX, fromY) || !IsInBounds(toX, toY)) return false;
     const TileData& tA = tiles_[(size_t)(fromY * width_ + fromX)];
     const TileData& tB = tiles_[(size_t)(toY * width_ + toX)];
+
+    // Klippen ohne Rampe sind unpassierbar
+    if ((tA.isCliff && !tA.isRamp) || (tB.isCliff && !tB.isRamp)) return false;
 
     // Höhenunterschied >= 1 ist nur über Rampen passierbar
     if (std::abs((int)tA.heightLevel - (int)tB.heightLevel) >= 1) {
@@ -806,7 +1295,7 @@ void World::UpdateRoads(float dt) {
 // ============================================================================
 //  Pfadsuche & Bewegungskosten (Phase 2)
 // ============================================================================
-float World::GetMovementCost(int fromX, int fromY, int toX, int toY) const {
+float World::GetMovementCost(int fromX, int fromY, int toX, int toY, int actorTribeId, bool ignoreTerritory) const {
     if (!CanTraverseBetween(fromX, fromY, toX, toY)) return 9999.0f;
 
     const TileData& td = tiles_[(size_t)(toY * width_ + toX)];
@@ -838,6 +1327,14 @@ float World::GetMovementCost(int fromX, int fromY, int toX, int toY) const {
     if (env_) {
         baseCost *= env_->GetTileTraversalCost(toX, toY);
     }
+
+    // A*-Pathfinding-Respekt vor fremden Grenzen (Phase 2):
+    // Fremdes Clan-Territorium erhält extrem hohe Bewegungskosten (+45.0f),
+    // sodass friedliche Figuren fremde Gebiete im Alltag umlaufen.
+    if (!ignoreTerritory && actorTribeId >= 0 && td.ownerTribeId >= 0 && td.ownerTribeId != actorTribeId) {
+        baseCost += 45.0f;
+    }
+
     return baseCost;
 }
 
@@ -858,7 +1355,7 @@ bool World::HasLineOfSight(Vector2 a, Vector2 b) const {
     return true;
 }
 
-bool World::FindPath(Vector2 from, Vector2 to, std::vector<Vector2>& outPath) const {
+bool World::FindPath(Vector2 from, Vector2 to, std::vector<Vector2>& outPath, int actorTribeId, bool ignoreTerritory) const {
     outPath.clear();
 
     const int sx = ToTile(from.x), sy = ToTile(from.y);
@@ -941,7 +1438,7 @@ bool World::FindPath(Vector2 from, Vector2 to, std::vector<Vector2>& outPath) co
             const int ni = ny * width_ + nx;
             if (closedStamp_[(size_t)ni] == stamp_) continue;
 
-            const float moveCost = GetMovementCost(cx, cy, nx, ny);
+            const float moveCost = GetMovementCost(cx, cy, nx, ny, actorTribeId, ignoreTerritory);
             if (moveCost >= 9000.0f) continue;
 
             const float g = gScore_[(size_t)current] + kDist[k] * moveCost;

@@ -28,7 +28,9 @@ enum class SelectedAction {
     TERRAIN_GRASS,
     TERRAIN_WATER,
     TERRAIN_FOREST,
-    SPAWN_HUNTER,
+    SPAWN_MAN,          // Mann erschaffen (♂)
+    SPAWN_WOMAN,        // Frau erschaffen (♀)
+    SPAWN_HUNTER,       // Legacy Alias
     SPAWN_ANIMAL,
     IGNITE_FIRE,        // Feuer / Lauffeuer legen
     GRAVITY_ANOMALY     // Antigravitation / Schwerelosigkeit
@@ -61,16 +63,22 @@ public:
 
 private:
     void HandleInput();
-    void SpawnCaveman(Role role, Vector2 worldPos, int preferredClanId = 1, Color clanColor = BLANK);
+    void SpawnCaveman(Role role, Vector2 worldPos, int preferredClanId = -1, Color clanColor = BLANK, Gender gender = Gender::Male);
     void SpawnChildFromParents(Caveman& parentA, Caveman& parentB, Vector2 spawnPos);
     void SpawnAnimal(Vector2 worldPos);
     std::vector<Vector2> FindTribeSpawnLocations(int count);
     void UpdateDemographicsAndFactions(float dt);
+    void CheckLeadershipChallenges(float dt);
+    void CheckAndExecuteSecession(float dt);
+    bool FindSecessionSettlementSpot(Vector2& outPos) const;
+    void CheckTownCenterConquest();
     void DrawRelationshipLines(const Caveman& selected) const;
     int GetAliveCount() const;
 
     Tribe& CurrentUiTribe();
     const Tribe& CurrentUiTribe() const;
+    Tribe* GetTribe(int id);
+    const Tribe* GetTribe(int id) const;
 
     World world_;
     EnvironmentalSystem env_;
@@ -84,10 +92,12 @@ private:
     SkillTreeUI skillTreeUI_;
 
     bool isPaused_ = false;
-    bool showTerritoryOverlay_ = false;
+    bool showTerritoryOverlay_ = true;
     float timeSpeed_ = 1.0f;
     float totalSimTime_ = 0.0f;
     float demographicTimer_ = 0.0f;
+    float challengeTimer_ = 0.0f;
+    float schismTimer_ = 0.0f;
     int nextCavemanId_ = 1;
 
     // Aktive Aktion & Kachel-Auswahl (Standard: Normaler Cursor ohne Werkzeug)

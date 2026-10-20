@@ -41,6 +41,7 @@ private:
     static float ScoreGatherStone(const Caveman& agent, const WorldContext& ctx, int& outNodeId, std::string& outReason);
     static float ScoreBuild(const Caveman& agent, const WorldContext& ctx, int& outBuildingId, std::string& outReason);
     static float ScoreCraft(const Caveman& agent, const WorldContext& ctx, int& outBenchId, std::string& outReason);
+    static float ScoreBorderRaid(const Caveman& agent, const WorldContext& ctx, int& outTileX, int& outTileY, std::string& outReason);
     static float ScoreWander(const Caveman& agent, const WorldContext& ctx, std::string& outReason);
 
     // Hilfsfunktion: Entfernungsfaktor (1.0 = direkt daneben, fällt sanft ab)

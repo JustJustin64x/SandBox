@@ -7,6 +7,7 @@
 
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 class World;
 class Tribe;
@@ -16,6 +17,9 @@ class EnvironmentalSystem;
 
 // Rolle bestimmt Fähigkeiten und Sprite-Zeile.
 enum class Role { Hunter = 0, Gatherer = 1, Elder = 2, Child = 3 };
+
+// Geschlecht für demografische Fortpflanzung & Rollen
+enum class Gender { Male = 0, Female = 1 };
 
 // Zustände der State-Machine.
 enum class CavemanState {
@@ -30,6 +34,7 @@ enum class CavemanState {
     WarmingUp,            // Aufwärmen am Feuer oder in einer Hütte
     Socializing,          // Gespräche, Klatsch, Flirten, soziale Bindung
     Expedition,           // Forschungsexpedition zu einem POI mit Ausrüstung
+    BorderRaid,           // Grenzkampf, Grenzpatrouille & Kachel-Eroberung (Phase 4)
     Sleeping,
     Eating,
     Dead
@@ -48,7 +53,8 @@ enum class SocialEmote {
     ShareFood,    // Grünes Nahrungs-Icon (Futter geteilt)
     Dispute,      // Rote Blitze / Konflikt (Streit / Rivale)
     Crown,        // Goldene Krone (Aufstieg zum Häuptling)
-    Idea          // Goldener Stern / Glühbirne (Heureka-Entdeckung / Bauplan)
+    Idea,         // Goldener Stern / Glühbirne (Heureka-Entdeckung / Bauplan)
+    Vote          // Blaue Wahlurne / Stimmabgabe (Freie Stammeswahl)
 };
 
 // Werkzeug-Stufen (Abbaugeschwindigkeit & freigeschaltete Rohstoffe)
@@ -121,22 +127,28 @@ struct WorldContext {
     int population;       // lebende Stammesmitglieder
     float timeOfDay;      // 0..1 (Tag/Nacht für Kälte & Beleuchtung)
     std::vector<Caveman>* allCavemen = nullptr;
+    std::vector<std::unique_ptr<class Tribe>>* allTribes = nullptr;
     EnvironmentalSystem* env = nullptr;
 };
 
 class Caveman {
 public:
-    Caveman(int id, std::string name, Role role, Vector2 position);
+    Caveman(int id, std::string name, Role role, Vector2 position, Gender gender = Gender::Male);
 
     void Update(WorldContext& ctx, float dt);
     void Draw(const SpriteSheet& sheet, bool highlighted, float visualYOffset = 0.0f) const;
     void DrawDebugPath() const;
     void TakeDamage(float amount, const char* cause, WorldContext& ctx);
+    void TakeDamageNonLethal(float amount);
 
     // --- Abfragen -------------------------------------------------------------
     int Id() const                 { return id_; }
     const std::string& Name() const { return name_; }
     Role GetRole() const           { return role_; }
+    Gender GetGender() const       { return gender_; }
+    void SetGender(Gender g)       { gender_ = g; }
+    const char* GenderSymbol() const { return gender_ == Gender::Male ? "♂" : "♀"; }
+    const char* GenderName() const   { return gender_ == Gender::Male ? "Mann" : "Frau"; }
     CavemanState State() const     { return state_; }
     TaskPhase Phase() const        { return phase_; }
     bool IsDead() const            { return state_ == CavemanState::Dead; }
@@ -149,6 +161,9 @@ public:
     float Warmth() const           { return warmth_; }
     float Tiredness() const        { return tiredness_; }
     float Morale() const           { return morale_; }
+    float Loyalty() const          { return loyalty_; }
+    void SetLoyalty(float l)       { loyalty_ = std::clamp(l, 0.0f, 100.0f); }
+    void ModifyLoyalty(float delta) { loyalty_ = std::clamp(loyalty_ + delta, 0.0f, 100.0f); }
     float SocialNeed() const       { return socialNeed_; }
     float AgeYears() const         { return ageYears_; }
     float MaxLifespan() const      { return maxLifespan_; }
@@ -193,6 +208,10 @@ public:
     float DecisionScore() const               { return lastDecisionScore_; }
     std::string ActivityText() const;
     std::string GetSocialSummary(const Tribe& tribe) const;
+    bool SetDestinationDirect(const class World& world, Vector2 target, bool ignoreTerritory = true);
+
+    bool IsNodeBlacklisted(int nodeId) const;
+    void BlacklistNode(int nodeId, float duration = 15.0f);
 
 private:
     enum class MoveResult { Moving, Arrived, Failed };
@@ -221,6 +240,7 @@ private:
     void UpdateWarmingUp(WorldContext& ctx, float dt);
     void UpdateSocializing(WorldContext& ctx, float dt);
     void UpdateExpedition(WorldContext& ctx, float dt);
+    void UpdateBorderRaid(WorldContext& ctx, float dt);
     void UpdateSleeping(WorldContext& ctx, float dt);
     void UpdateEating(WorldContext& ctx, float dt);
     void UpdateReturning(WorldContext& ctx, float dt);
@@ -244,6 +264,7 @@ private:
     int id_;
     std::string name_;
     Role role_;
+    Gender gender_ = Gender::Male;
     float ageYears_ = 20.0f;
     float maxLifespan_ = 78.0f;
 
@@ -281,6 +302,7 @@ private:
     int clanId_ = 1;
     Color clanColor_ = WHITE;
     int socialRank_ = 3; // Worker
+    float loyalty_ = 75.0f; // 0..100 (Rebellion/Schisma bei < 20)
 
     // --- Utility AI Feedback ----------------------------------------------------
     std::string lastDecisionReason_ = "Erkundet die Gegend";
@@ -318,6 +340,16 @@ private:
     bool isMoving_ = false;
     bool isSwimming_ = false;
     float damageFlash_ = 0.0f;
+
+    // --- Intervallbasierte Schadens-Tick-Timer (Verhindert -0 HP Frame-Spam) ------
+    float starvationTimer_ = 0.0f;
+    float coldDamageTimer_ = 0.0f;
+    float drownDamageTimer_ = 0.0f;
+    float envDamageTimer_ = 0.0f;
+
+    // --- KI-Task-Commitment & Blacklisting unpassierbarer Resourcen ----------------
+    float taskCommitmentTimer_ = 0.0f;
+    std::unordered_map<int, float> blacklistedNodes_;
 };
 
 #endif // CAVEMAN_H

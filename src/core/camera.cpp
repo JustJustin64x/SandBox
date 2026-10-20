@@ -37,9 +37,7 @@ void CameraController::Update(float deltaTime) {
             camera_.offset = mouse;
             camera_.target = mouseWorldPos;
 
-            camera_.zoom += 0.25f * wheel;
-            if (camera_.zoom < 0.25f) camera_.zoom = 0.25f;
-            if (camera_.zoom > 8.0f)  camera_.zoom = 8.0f;
+            camera_.zoom = std::clamp(camera_.zoom + 0.18f * wheel * camera_.zoom, 0.15f, 7.0f);
         }
     }
 }

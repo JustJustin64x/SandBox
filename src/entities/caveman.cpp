@@ -17,8 +17,6 @@
 
 namespace {
 
-constexpr float kBlockDuration = 3.0f;
-
 const RoleTraits kRoleTraits[4] = {
     //  speed work  build craft yield hunger tired attack canHunt canBuild canCraft canMat row
     {  44.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.1f,  1.0f, 10.0f, true,   true,    true,    true,  0 },   // Jäger
@@ -55,6 +53,7 @@ const char* StateName(CavemanState state) {
         case CavemanState::WarmingUp:          return "WARMING_UP";
         case CavemanState::Socializing:        return "SOCIALIZING";
         case CavemanState::Expedition:         return "EXPEDITION";
+        case CavemanState::BorderRaid:         return "BORDER_RAID";
         case CavemanState::Sleeping:           return "SLEEPING";
         case CavemanState::Eating:             return "EATING";
         case CavemanState::Dead:               return "DEAD";
@@ -120,8 +119,11 @@ const RoleTraits& GetRoleTraits(Role role) {
 // ============================================================================
 //  Konstruktion
 // ============================================================================
-Caveman::Caveman(int id, std::string name, Role role, Vector2 position)
-    : id_(id), name_(std::move(name)), role_(role), position_(position), targetPosition_(position), homeCampPos_(position) {
+Caveman::Caveman(int id, std::string name, Role role, Vector2 position, Gender gender)
+    : id_(id), name_(std::move(name)), role_(role), gender_(gender), position_(position), targetPosition_(position), homeCampPos_(position) {
+    if (role_ == Role::Gatherer && gender == Gender::Male) {
+        gender_ = Gender::Female;
+    }
     hunger_     = (float)GetRandomValue(5, 30);
     warmth_     = (float)GetRandomValue(85, 100);
     tiredness_  = (float)GetRandomValue(0, 25);
@@ -210,6 +212,15 @@ void Caveman::Update(WorldContext& ctx, float dt) {
     animTime_ += dt;
     damageFlash_  = std::max(0.0f, damageFlash_ - dt);
     blockedTimer_ = std::max(0.0f, blockedTimer_ - dt);
+    taskCommitmentTimer_ = std::max(0.0f, taskCommitmentTimer_ - dt);
+    for (auto it = blacklistedNodes_.begin(); it != blacklistedNodes_.end();) {
+        it->second -= dt;
+        if (it->second <= 0.0f) {
+            it = blacklistedNodes_.erase(it);
+        } else {
+            ++it;
+        }
+    }
     if (emoteTimer_ > 0.0f) {
         emoteTimer_ -= dt;
         if (emoteTimer_ <= 0.0f) activeEmote_ = SocialEmote::None;
@@ -264,6 +275,7 @@ void Caveman::Update(WorldContext& ctx, float dt) {
         case CavemanState::WarmingUp:          UpdateWarmingUp(ctx, dt); break;
         case CavemanState::Socializing:        UpdateSocializing(ctx, dt); break;
         case CavemanState::Expedition:         UpdateExpedition(ctx, dt); break;
+        case CavemanState::BorderRaid:         UpdateBorderRaid(ctx, dt); break;
         case CavemanState::Sleeping:           UpdateSleeping(ctx, dt); break;
         case CavemanState::Eating:             UpdateEating(ctx, dt); break;
         case CavemanState::Dead:               break;
@@ -284,7 +296,13 @@ void Caveman::UpdateNeeds(WorldContext& ctx, float dt) {
     const float hungerRate = cfg::kHungerPerSecond * t.hungerRate * (asleep ? cfg::kSleepHungerFactor : 1.0f);
     hunger_ = std::min(cfg::kMaxStat, hunger_ + hungerRate * dt);
     if (hunger_ >= cfg::kMaxStat) {
-        TakeDamage(cfg::kStarvationDamagePerSecond * dt, "Hunger", ctx);
+        starvationTimer_ += dt;
+        if (starvationTimer_ >= 2.5f) {
+            starvationTimer_ = 0.0f;
+            TakeDamage(4.0f, "Hunger", ctx);
+        }
+    } else {
+        starvationTimer_ = 0.0f;
     }
 
     // 2. Müdigkeit
@@ -300,6 +318,7 @@ void Caveman::UpdateNeeds(WorldContext& ctx, float dt) {
 
     if (ambient > 0.0f) {
         warmth_ = std::min(100.0f, warmth_ + (ambient + std::max(0.0f, envDelta)) * dt);
+        coldDamageTimer_ = 0.0f;
     } else {
         bool isNight = (ctx.timeOfDay > 0.72f || ctx.timeOfDay < 0.22f);
         float rawLoss = (isNight ? cfg::kWarmthLossNight : cfg::kWarmthLossDay) - envDelta;
@@ -318,19 +337,33 @@ void Caveman::UpdateNeeds(WorldContext& ctx, float dt) {
         }
 
         if (warmth_ <= 0.0f) {
-            TakeDamage(cfg::kColdDamagePerSecond * dt, "Kälte", ctx);
+            coldDamageTimer_ += dt;
+            if (coldDamageTimer_ >= 2.5f) {
+                coldDamageTimer_ = 0.0f;
+                TakeDamage(4.0f, "Kälte", ctx);
+            }
+        } else {
+            coldDamageTimer_ = 0.0f;
         }
     }
 
-    // 3b. Direkter Umweltschaden (Feuer & Starkstrom im Wasser)
+    // 3b. Direkter Umweltschaden (Feuer & Starkstrom im Wasser) getaktet alle 1.0s
     if (ctx.env) {
         const int tx = World::ToTile(position_.x);
         const int ty = World::ToTile(position_.y);
         const TileEnvState& envSt = ctx.env->GetState(tx, ty);
-        if (envSt.isBurning) {
-            TakeDamage(14.0f * std::max(0.4f, envSt.fireIntensity) * dt, "Feuer", ctx);
-        } else if (envSt.electrifiedTimer > 0.0f) {
-            TakeDamage(16.0f * dt, "Starkstrom", ctx);
+        if (envSt.isBurning || envSt.electrifiedTimer > 0.0f) {
+            envDamageTimer_ += dt;
+            if (envDamageTimer_ >= 1.0f) {
+                envDamageTimer_ = 0.0f;
+                if (envSt.isBurning) {
+                    TakeDamage(std::max(4.0f, 10.0f * envSt.fireIntensity), "Feuer", ctx);
+                } else if (envSt.electrifiedTimer > 0.0f) {
+                    TakeDamage(8.0f, "Starkstrom", ctx);
+                }
+            }
+        } else {
+            envDamageTimer_ = 0.0f;
         }
     }
 
@@ -348,9 +381,13 @@ void Caveman::UpdateNeeds(WorldContext& ctx, float dt) {
         if (wt == WaterType::Saltwater) swimApDrain *= 1.5f;
         SpendAp(swimApDrain * dt);
 
-        // Ertrinken: Fällt AP im tiefen Wasser auf 0, verliert der Caveman kontinuierlich HP
+        // Ertrinken: Fällt AP im tiefen Wasser auf 0, verliert der Caveman alle 1.5s spürbar HP
         if (ap_ <= 0.0f && (tt == TILE_DEEP_WATER || wt == WaterType::Saltwater)) {
-            TakeDamage(12.0f * dt, "Ertrinken", ctx);
+            drownDamageTimer_ += dt;
+            if (drownDamageTimer_ >= 1.5f) {
+                drownDamageTimer_ = 0.0f;
+                TakeDamage(8.0f, "Ertrinken", ctx);
+            }
             // Bricht aktuelle Aufgabe ab und flieht panisch zum nächsten sicheren Ufer
             if (state_ != CavemanState::Fleeing) {
                 int safeX = curTx, safeY = curTy;
@@ -362,8 +399,11 @@ void Caveman::UpdateNeeds(WorldContext& ctx, float dt) {
                     }
                 }
             }
+        } else {
+            drownDamageTimer_ = 0.0f;
         }
     } else {
+        drownDamageTimer_ = 0.0f;
         // Süßwasser-Interaktion: An Süßwasser-Ufern können Cavemen trinken/sich abkühlen (regeneriert AP und Moral)
         if (ctx.world.IsNearFreshwater(curTx, curTy, 1)) {
             ap_ = std::min(100.0f, ap_ + 6.0f * dt);
@@ -390,6 +430,28 @@ void Caveman::UpdateNeeds(WorldContext& ctx, float dt) {
 
     targetMorale = std::clamp(targetMorale, 10.0f, 100.0f);
     morale_ += (targetMorale - morale_) * 0.1f * dt;
+
+    // 6. Loyalität zum Stamm (beeinflusst von Moral, Bedürfnissen und Clan-Wohlstand)
+    float targetLoyalty = 75.0f;
+    if (socialRank_ == (int)SocialRank::Chief) {
+        targetLoyalty = 100.0f;
+    } else {
+        if (morale_ > 65.0f) targetLoyalty += 15.0f;
+        else if (morale_ < 35.0f) targetLoyalty -= 35.0f;
+
+        if (hunger_ > 75.0f) targetLoyalty -= 20.0f;
+        if (warmth_ < 35.0f) targetLoyalty -= 15.0f;
+        if (personality_.dominance > 0.35f) targetLoyalty -= 15.0f; // Machthungrige neigen eher zur Rebellion
+
+        int chiefId = ctx.tribe.Hierarchy().GetChiefId();
+        if (chiefId >= 0 && chiefId != id_) {
+            float respectToChief = ctx.tribe.Relationships().GetRespect(id_, chiefId);
+            if (respectToChief < 0.0f) targetLoyalty -= 20.0f;
+            else if (respectToChief > 50.0f) targetLoyalty += 15.0f;
+        }
+    }
+    targetLoyalty = std::clamp(targetLoyalty, 5.0f, 100.0f);
+    loyalty_ += (targetLoyalty - loyalty_) * 0.05f * dt;
 }
 
 void Caveman::TakeDamage(float amount, const char* cause, WorldContext& ctx) {
@@ -402,9 +464,27 @@ void Caveman::TakeDamage(float amount, const char* cause, WorldContext& ctx) {
     hp_ -= amount;
     lastDamageCause_ = cause;
     damageFlash_ = 0.25f;
-    if (hp_ > 0.0f) {
-        ctx.log.Add(TextFormat("%s wurde verletzt (%s, -%d HP)", name_.c_str(), cause, (int)amount),
+    int intDamage = (int)std::round(amount);
+    if (hp_ > 0.0f && intDamage > 0) {
+        ctx.log.Add(TextFormat("%s wurde verletzt (%s, -%d HP)", name_.c_str(), cause, intDamage),
                     { 255, 160, 120, 255 });
+    }
+}
+
+void Caveman::TakeDamageNonLethal(float amount) {
+    if (IsDead() || amount <= 0.0f) return;
+    hp_ = std::max(20.0f, hp_ - amount);
+    damageFlash_ = 0.25f;
+}
+
+bool Caveman::IsNodeBlacklisted(int nodeId) const {
+    auto it = blacklistedNodes_.find(nodeId);
+    return it != blacklistedNodes_.end() && it->second > 0.0f;
+}
+
+void Caveman::BlacklistNode(int nodeId, float duration) {
+    if (nodeId >= 0) {
+        blacklistedNodes_[nodeId] = duration;
     }
 }
 
@@ -430,12 +510,20 @@ void Caveman::Think(WorldContext& ctx) {
 
     if (IsBlocked(dec.state)) return;
 
-    if (taskDone_ || (dec.score > lastDecisionScore_ + 0.15f && IsInterruptible())) {
+    // Task-Commitment (Hysterese): Nicht zwischen Aufgaben hin- und herflippen!
+    // Wenn die Figur aktiv an einer Aufgabe arbeitet und der Commitment-Timer noch läuft,
+    // bleibt sie bei der aktuellen Aufgabe, außer es liegt ein Notfall (HP < 25 oder Flucht) vor.
+    bool emergency = (hp_ < 25.0f);
+    if (!taskDone_ && taskCommitmentTimer_ > 0.0f && !emergency) {
+        return;
+    }
+
+    if (taskDone_ || (dec.score > lastDecisionScore_ + 0.25f && IsInterruptible())) {
         if (!EnterState(dec.state, dec.resource, dec.targetBuildingId, dec.targetNodeId, dec.targetCharacterId, dec.targetPoiId, ctx)) {
-            blockedState_ = dec.state;
-            blockedTimer_ = kBlockDuration;
+            // Fehlgeschlagenes Betreten: Nicht für 3s einfrieren, sondern in 0.5s neu evaluieren
+            thinkTimer_ = 0.5f;
             EnterState(CavemanState::Idle, ResourceType::Bush, -1, -1, -1, -1, ctx);
-            stateTimer_ = 1.0f;
+            stateTimer_ = 0.5f;
         }
     }
 }
@@ -470,7 +558,16 @@ bool Caveman::EnterState(CavemanState state, ResourceType resource, int targetBu
         case CavemanState::Wandering: {
             stateTimer_ = (float)GetRandomValue(40, 80) / 10.0f;
             Vector2 dest;
-            if (ctx.world.FindRandomWalkablePosition(position_, 60.0f, dest, 20)) {
+            for (int att = 0; att < 12; ++att) {
+                if (ctx.world.FindRandomWalkablePosition(position_, 55.0f, dest, 10)) {
+                    int tx = World::ToTile(dest.x), ty = World::ToTile(dest.y);
+                    int owner = ctx.world.GetOwnerTribeId(tx, ty);
+                    if (owner == clanId_ || owner == -1) {
+                        return SetDestination(ctx, dest);
+                    }
+                }
+            }
+            if (ctx.world.FindRandomWalkablePosition(ctx.tribe.CampPosition(), 35.0f, dest, 15)) {
                 return SetDestination(ctx, dest);
             }
             return false;
@@ -497,13 +594,21 @@ bool Caveman::EnterState(CavemanState state, ResourceType resource, int targetBu
             return SetDestination(ctx, ctx.tribe.CampPosition());
         }
         case CavemanState::Hunting: {
+            ResourceNode* prey = ctx.resources.Get(targetNodeId);
+            if (!prey || !prey->IsAvailable()) {
+                BlacklistNode(targetNodeId, 10.0f);
+                return false;
+            }
+            if (!SetDestination(ctx, prey->position)) {
+                BlacklistNode(targetNodeId, 15.0f);
+                return false;
+            }
             targetNode_ = targetNodeId;
             ctx.resources.Claim(targetNode_);
-            ResourceNode* prey = ctx.resources.Get(targetNode_);
-            if (!prey || !prey->IsAvailable()) return false;
             targetGeneration_ = prey->generation;
             repathTimer_ = 0.5f;
-            return SetDestination(ctx, prey->position);
+            taskCommitmentTimer_ = 3.5f;
+            return true;
         }
         case CavemanState::GatheringFood:
         case CavemanState::GatheringMaterials: {
@@ -511,29 +616,43 @@ bool Caveman::EnterState(CavemanState state, ResourceType resource, int targetBu
                 targetBuilding_ = targetBuildingId;
                 Building* b = ctx.tribe.Buildings().Get(targetBuilding_);
                 if (!b || !b->NeedsFarmTending()) return false;
+                if (!SetDestination(ctx, b->position)) return false;
                 b->occupants++;
-                return SetDestination(ctx, b->position);
+                taskCommitmentTimer_ = 3.5f;
+                return true;
+            }
+            ResourceNode* node = ctx.resources.Get(targetNodeId);
+            if (!node || !node->IsAvailable()) {
+                BlacklistNode(targetNodeId, 10.0f);
+                return false;
+            }
+            if (!SetDestination(ctx, node->position)) {
+                BlacklistNode(targetNodeId, 15.0f);
+                return false;
             }
             targetNode_ = targetNodeId;
             ctx.resources.Claim(targetNode_);
-            ResourceNode* node = ctx.resources.Get(targetNode_);
-            if (!node || !node->IsAvailable()) return false;
             targetGeneration_ = node->generation;
-            return SetDestination(ctx, node->position);
+            taskCommitmentTimer_ = 3.5f;
+            return true;
         }
         case CavemanState::Building: {
             targetBuilding_ = targetBuildingId;
             Building* b = ctx.tribe.Buildings().Get(targetBuilding_);
             if (!b || !b->NeedsWork()) return false;
+            if (!SetDestination(ctx, b->position)) return false;
             b->builders++;
-            return SetDestination(ctx, b->position);
+            taskCommitmentTimer_ = 3.5f;
+            return true;
         }
         case CavemanState::Crafting: {
             targetBuilding_ = targetBuildingId;
             Building* b = ctx.tribe.Buildings().Get(targetBuilding_);
             if (!b || (b->type != BuildingType::CraftBench && b->type != BuildingType::Kiln) || !b->finished) return false;
+            if (!SetDestination(ctx, b->position)) return false;
             b->occupants++;
-            return SetDestination(ctx, b->position);
+            taskCommitmentTimer_ = 3.5f;
+            return true;
         }
         case CavemanState::WarmingUp: {
             targetBuilding_ = targetBuildingId;
@@ -541,13 +660,16 @@ bool Caveman::EnterState(CavemanState state, ResourceType resource, int targetBu
             if (Building* b = ctx.tribe.Buildings().Get(targetBuilding_)) {
                 dest = b->position;
             }
-            return SetDestination(ctx, dest);
+            if (!SetDestination(ctx, dest)) return false;
+            taskCommitmentTimer_ = 3.5f;
+            return true;
         }
         case CavemanState::Socializing: {
             targetSocialPartner_ = targetCharacterId;
             if (ctx.allCavemen) {
                 for (const auto& c : *ctx.allCavemen) {
                     if (c.Id() == targetSocialPartner_ && !c.IsDead()) {
+                        taskCommitmentTimer_ = 3.5f;
                         return SetDestination(ctx, c.Position());
                     }
                 }
@@ -559,29 +681,63 @@ bool Caveman::EnterState(CavemanState state, ResourceType resource, int targetBu
             PointOfInterest* poi = ctx.tribe.POIs().Get(targetPoi_);
             if (!poi || !poi->CanBeExplored()) return false;
 
+            if (!SetDestination(ctx, poi->position)) return false;
+
             carryingTorch_ = poi->gear.torch;
             if (poi->gear.torch && ctx.tribe.Stock().torches > 0) ctx.tribe.Stock().torches--;
             if (poi->gear.provisions && ctx.tribe.Stock().food > 0) ctx.tribe.Stock().food--;
 
             poi->assignedExplorerId = id_;
+            taskCommitmentTimer_ = 3.5f;
             ctx.log.Add(TextFormat("%s bricht zur Expedition nach '%s' auf!", name_.c_str(), poi->name.c_str()), GOLD);
-            return SetDestination(ctx, poi->position);
+            return true;
+        }
+        case CavemanState::BorderRaid: {
+            stateTimer_ = 6.0f;
+            int tx = targetNodeId;
+            int ty = targetCharacterId;
+            if (ctx.world.IsInBounds(tx, ty)) {
+                taskCommitmentTimer_ = 3.5f;
+                return SetDestination(ctx, World::TileCenter(tx, ty));
+            }
+            return false;
         }
         case CavemanState::Sleeping: {
             targetBuilding_ = targetBuildingId;
-            if (Building* b = ctx.tribe.Buildings().Get(targetBuilding_)) {
+            Building* b = ctx.tribe.Buildings().Get(targetBuilding_);
+            if (b && b->type == BuildingType::Hut && b->IsAvailableShelter()) {
                 b->occupants++;
                 sleepingInShelter_ = true;
+                taskCommitmentTimer_ = 3.5f;
                 return SetDestination(ctx, b->position);
             }
+            targetBuilding_ = -1;
             sleepingInShelter_ = false;
-            Vector2 spot;
-            if (ctx.world.FindRandomWalkablePosition(ctx.tribe.CampPosition(), 24.0f, spot, 15)) {
-                return SetDestination(ctx, spot);
+            Vector2 camp = ctx.tribe.CampPosition();
+            Vector2 spot = camp;
+            bool foundSpot = false;
+            for (int att = 0; att < 20; ++att) {
+                float dist = (float)GetRandomValue(24, 40); // 1.5 - 2.5 Kacheln
+                float angle = (float)GetRandomValue(0, 360) * DEG2RAD;
+                Vector2 candidate = { camp.x + std::cos(angle) * dist, camp.y + std::sin(angle) * dist };
+                int tx = World::ToTile(candidate.x);
+                int ty = World::ToTile(candidate.y);
+                int ctxCamp = World::ToTile(camp.x);
+                int ctyCamp = World::ToTile(camp.y);
+                if ((tx != ctxCamp || ty != ctyCamp) && ctx.world.IsWalkableTile(tx, ty)) {
+                    spot = World::TileCenter(tx, ty);
+                    foundSpot = true;
+                    break;
+                }
             }
-            return SetDestination(ctx, ctx.tribe.CampPosition());
+            if (!foundSpot) {
+                spot = { camp.x + 28.0f, camp.y };
+            }
+            taskCommitmentTimer_ = 3.5f;
+            return SetDestination(ctx, spot);
         }
         case CavemanState::Eating: {
+            taskCommitmentTimer_ = 3.5f;
             return SetDestination(ctx, ctx.tribe.StockpilePosition());
         }
         case CavemanState::Dead:
@@ -711,8 +867,14 @@ void Caveman::UpdateHunting(WorldContext& ctx, float dt) {
             }
         }
         const MoveResult r = MoveAlongPath(ctx, dt);
-        if (r == MoveResult::Failed) FinishTask();
-        else if (r == MoveResult::Arrived && !SetDestination(ctx, prey->position)) FinishTask();
+        if (r == MoveResult::Failed) {
+            BlacklistNode(targetNode_, 15.0f);
+            ReleaseNode(ctx);
+            thinkTimer_ = 0.5f;
+            FinishTask();
+        } else if (r == MoveResult::Arrived && !SetDestination(ctx, prey->position)) {
+            FinishTask();
+        }
         return;
     }
 
@@ -839,6 +1001,9 @@ void Caveman::UpdateHarvesting(WorldContext& ctx, float dt) {
     if (phase_ == TaskPhase::MovingToTarget) {
         const MoveResult r = MoveAlongPath(ctx, dt);
         if (r == MoveResult::Failed) {
+            BlacklistNode(targetNode_, 15.0f);
+            ReleaseNode(ctx);
+            thinkTimer_ = 0.5f;
             FinishTask();
         } else if (r == MoveResult::Arrived) {
             phase_ = TaskPhase::Working;
@@ -887,6 +1052,18 @@ void Caveman::UpdateHarvesting(WorldContext& ctx, float dt) {
         }
         if (heureka) {
             TriggerEmote(SocialEmote::Idea, 4.0f);
+        }
+
+        // Bei akutem Hunger (>= 65%) isst die Figur 1 Portion direkt vor Ort, um nicht auf dem Rückweg zu verhungern
+        if (carry == CarryType::Food && hunger_ >= 65.0f && got >= 1) {
+            hunger_ = std::max(0.0f, hunger_ - cfg::kHungerPerFood);
+            int remaining = got - 1;
+            if (remaining > 0) {
+                StartReturning(ctx, carry, remaining);
+            } else {
+                FinishTask();
+            }
+            return;
         }
 
         StartReturning(ctx, carry, got);
@@ -1233,6 +1410,102 @@ void Caveman::UpdateExpedition(WorldContext& ctx, float dt) {
     }
 }
 
+void Caveman::UpdateBorderRaid(WorldContext& ctx, float dt) {
+    stateTimer_ -= dt;
+
+    // 1. Auf dem Weg zum oder am Ziel bewegen
+    MoveAlongPath(ctx, dt);
+
+    // 2. Feinde/Verteidiger in Reichweite prüfen (Kampf!)
+    Caveman* enemy = nullptr;
+    float closestDist = 36.0f;
+
+    if (ctx.allCavemen) {
+        for (auto& other : *ctx.allCavemen) {
+            if (other.IsDead() || other.ClanId() == clanId_) continue;
+            float d = Vector2Distance(position_, other.Position());
+            if (d < closestDist) {
+                closestDist = d;
+                enemy = &other;
+            }
+        }
+    }
+
+    if (enemy) {
+        // Grenzkampf!
+        TriggerEmote(SocialEmote::Dispute, 2.5f);
+        enemy->TriggerEmote(SocialEmote::Dispute, 2.5f);
+
+        // Kampfschaden basierend auf Waffen
+        float myDmgMult = 1.0f;
+        if (weaponTier_ == WeaponTier::FlintSpear) myDmgMult = 1.6f;
+        else if (weaponTier_ == WeaponTier::CompositeBow) myDmgMult = 1.9f;
+        else if (weaponTier_ == WeaponTier::MetalBlade) myDmgMult = 2.4f;
+
+        float enemyDmgMult = 1.0f;
+        if (enemy->GetWeaponTier() == WeaponTier::FlintSpear) enemyDmgMult = 1.6f;
+        else if (enemy->GetWeaponTier() == WeaponTier::CompositeBow) enemyDmgMult = 1.9f;
+        else if (enemy->GetWeaponTier() == WeaponTier::MetalBlade) enemyDmgMult = 2.4f;
+
+        float dps = 14.0f * dt;
+        enemy->TakeDamage(dps * myDmgMult, "Grenzkampf", ctx);
+        TakeDamage(dps * 0.85f * enemyDmgMult, "Grenzkampf", ctx);
+
+        // Bei schwerer Verletzung (< 25 HP) flieht der Krieger zurück
+        if (hp_ < 25.0f) {
+            EnterState(CavemanState::Fleeing, ResourceType::Bush, -1, -1, -1, -1, ctx);
+            return;
+        }
+    } else {
+        // Belagerung feindlicher Grenz-Anker (BorderTotem, Outpost, Watchtower)
+        Building* targetAnchor = nullptr;
+        Tribe* enemyTribe = nullptr;
+        float closestAnchorDist = 48.0f;
+
+        if (ctx.allTribes) {
+            for (auto& otherTribe : *ctx.allTribes) {
+                if (otherTribe->Id() == clanId_) continue;
+                for (auto& b : otherTribe->Buildings().All()) {
+                    if (!b.finished || !b.IsTerritoryAnchor()) continue;
+                    float d = Vector2Distance(position_, b.position);
+                    if (d < closestAnchorDist) {
+                        closestAnchorDist = d;
+                        targetAnchor = &b;
+                        enemyTribe = otherTribe.get();
+                    }
+                }
+            }
+        }
+
+        if (targetAnchor && enemyTribe) {
+            TriggerEmote(SocialEmote::Dispute, 2.0f);
+            float siegeDps = 18.0f * dt;
+            if (weaponTier_ == WeaponTier::MetalBlade) siegeDps *= 2.2f;
+            else if (weaponTier_ == WeaponTier::FlintSpear) siegeDps *= 1.5f;
+
+            targetAnchor->hp -= siegeDps;
+            if (targetAnchor->hp <= 0.0f) {
+                std::string bName = BuildingTypeName(targetAnchor->type, targetAnchor->tier);
+                ctx.log.Add(TextFormat("BELAGERUNG: %s hat das %s von '%s' zerstört! Dessen Einflussfeld bricht zusammen!",
+                                       name_.c_str(), bName.c_str(), enemyTribe->Name().c_str()), RED);
+                targetAnchor->finished = false;
+                targetAnchor->hp = 0.0f;
+                FinishTask();
+                return;
+            }
+        } else {
+            // Grenzpatrouille an der Außenlinie: Sichert das Gebiet
+            if (stateTimer_ <= 1.0f) {
+                TriggerEmote(SocialEmote::Idea, 2.0f);
+            }
+        }
+    }
+
+    if (stateTimer_ <= 0.0f) {
+        FinishTask();
+    }
+}
+
 void Caveman::UpdateSleeping(WorldContext& ctx, float dt) {
     if (phase_ == TaskPhase::MovingToTarget) {
         if (MoveAlongPath(ctx, dt) != MoveResult::Moving) phase_ = TaskPhase::Working;
@@ -1319,7 +1592,14 @@ void Caveman::DeliverCarry(WorldContext& ctx) {
 bool Caveman::SetDestination(WorldContext& ctx, Vector2 target) {
     targetPosition_ = target;
     pathIndex_ = 0;
-    return ctx.world.FindPath(position_, target, path_);
+    bool ignoreTerritory = (state_ == CavemanState::Expedition || state_ == CavemanState::Fleeing || state_ == CavemanState::BorderRaid);
+    return ctx.world.FindPath(position_, target, path_, clanId_, ignoreTerritory);
+}
+
+bool Caveman::SetDestinationDirect(const World& world, Vector2 target, bool ignoreTerritory) {
+    targetPosition_ = target;
+    pathIndex_ = 0;
+    return world.FindPath(position_, target, path_, clanId_, ignoreTerritory);
 }
 
 Caveman::MoveResult Caveman::MoveAlongPath(WorldContext& ctx, float dt) {
@@ -1508,6 +1788,7 @@ std::string Caveman::ActivityText() const {
         case CavemanState::WarmingUp:          return "Sucht Wärme & Schutz";
         case CavemanState::Socializing:        return "Im Gespräch mit Stammesmitglied";
         case CavemanState::Expedition:         return (phase_ == TaskPhase::Working) ? "Erforscht Entdeckungsort" : (phase_ == TaskPhase::Returning) ? "Bringt Forschungswissen zurück" : "Auf Expedition zu POI";
+        case CavemanState::BorderRaid:         return "Auf Grenzüberfall / Grenzkampf";
         case CavemanState::Sleeping:           return sleepingInShelter_ ? "Schläft in Unterkunft" : "Schläft im Freien";
         case CavemanState::Eating:             return "Isst aus dem Vorrat";
         case CavemanState::Dead:               return "Verstorben";
@@ -1739,6 +2020,20 @@ void Caveman::DrawFloatingEmote(Vector2 drawPos) const {
         return;
     }
 
+    // A2) Bau- / Handwerks-Animation (Hammer schlägt im Takt mit Funken)
+    if (state_ == CavemanState::Building && phase_ == TaskPhase::Working) {
+        float strike = std::sin(animTime_ * 12.0f);
+        DrawCircleV({ ex, ey }, 5.5f, Fade(BLACK, 0.65f));
+        float hx = ex + strike * 1.5f;
+        float hy = ey - 1.0f + std::abs(strike) * 1.0f;
+        DrawLineEx({ hx - 2.5f, hy + 2.5f }, { hx + 2.0f, hy - 2.0f }, 1.5f, Color{ 140, 95, 45, 255 });
+        DrawRectangle((int)(hx + 1.0f), (int)(hy - 3.5f), 3, 2, LIGHTGRAY);
+        if (strike > 0.6f) {
+            DrawPixel((int)(hx + 3.0f), (int)(hy - 3.0f), GOLD);
+        }
+        return;
+    }
+
     // B) Aktives Sozial-Emote (Streit, Flirt/Herz, Teilen, Gespräch, Krone, Idee)
     if (activeEmote_ != SocialEmote::None) {
         DrawCircleV({ ex, ey }, 5.5f, Fade(BLACK, 0.65f));
@@ -1773,6 +2068,13 @@ void Caveman::DrawFloatingEmote(Vector2 drawPos) const {
             case SocialEmote::Idea:
                 DrawCircleV({ ex, ey - 0.5f }, 3.0f, YELLOW);
                 DrawRectangle((int)ex - 1, (int)ey + 2, 2, 2, LIGHTGRAY);
+                break;
+            case SocialEmote::Vote:
+                // Blaue Wahlurne mit Einwurfschlitz & Stimmzettel
+                DrawRectangleRounded({ ex - 4.5f, ey - 3.5f, 9.0f, 7.0f }, 0.25f, 3, Color{ 60, 130, 220, 255 });
+                DrawRectangleLines((int)(ex - 4.5f), (int)(ey - 3.5f), 9, 7, RAYWHITE);
+                DrawLineEx({ ex - 2.5f, ey - 1.5f }, { ex + 2.5f, ey - 1.5f }, 1.2f, WHITE);
+                DrawPixel((int)ex, (int)ey + 1, GOLD);
                 break;
             default:
                 break;

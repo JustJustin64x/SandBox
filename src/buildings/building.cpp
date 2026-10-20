@@ -37,6 +37,10 @@ const char* BuildingTypeName(BuildingType type, int tier) {
         case BuildingType::Grave:
             if (tier == 1) return "Ahnen-Steingrab";
             return "Megalith-Hügelgrab";
+        case BuildingType::BorderTotem:
+            return "Grenz-Totem";
+        case BuildingType::Outpost:
+            return "Außenposten";
     }
     return "Gebäude";
 }
@@ -54,18 +58,82 @@ std::string Building::DisplayName() const {
 
 ResourceCost Building::GetBuildCost() const {
     switch (type) {
-        case BuildingType::TownCenter: return { 6, 4, 0, 0 };
-        case BuildingType::Hut:        return { 6, 3, 0, 0 };
-        case BuildingType::Pantry:     return { 10, 6, 2, 0 };
-        case BuildingType::CraftBench: return { 8, 4, 0, 0 };
-        case BuildingType::Watchtower: return { 12, 8, 4, 0 };
-        case BuildingType::Kiln:       return { 6, 8, 0, 0 };
-        case BuildingType::FarmPlot:   return { 5, 2, 0, 0 };
-        case BuildingType::AnimalPen:  return { 9, 3, 2, 0 };
-        case BuildingType::Monument:   return { 8, 8, 0, 0 };
-        case BuildingType::Grave:      return { 0, 0, 0, 0 };
+        case BuildingType::TownCenter:  return { 6, 4, 0, 0 };
+        case BuildingType::Hut:         return { 6, 3, 0, 0 };
+        case BuildingType::Pantry:      return { 10, 6, 2, 0 };
+        case BuildingType::CraftBench:  return { 8, 4, 0, 0 };
+        case BuildingType::Watchtower:  return { 12, 8, 4, 0 };
+        case BuildingType::Kiln:        return { 6, 8, 0, 0 };
+        case BuildingType::FarmPlot:    return { 5, 2, 0, 0 };
+        case BuildingType::AnimalPen:   return { 9, 3, 2, 0 };
+        case BuildingType::Monument:    return { 8, 8, 0, 0 };
+        case BuildingType::Grave:       return { 0, 0, 0, 0 };
+        case BuildingType::BorderTotem: return { 3, 2, 0, 0 };
+        case BuildingType::Outpost:     return { 6, 4, 2, 0 };
     }
     return { 5, 5, 0, 0 };
+}
+
+float Building::GetAnchorRadius() const {
+    if (!finished) return 0.0f;
+    switch (type) {
+        case BuildingType::TownCenter:
+            if (tier == 1) return 18.0f;
+            if (tier == 2) return 26.0f;
+            return 34.0f;
+        case BuildingType::Watchtower:
+            return 26.0f;
+        case BuildingType::Outpost:
+            return 22.0f;
+        case BuildingType::BorderTotem:
+            return 16.0f;
+        case BuildingType::Monument:
+            return 14.0f;
+        case BuildingType::Hut:
+        case BuildingType::Kiln:
+        case BuildingType::CraftBench:
+        case BuildingType::Pantry:
+        case BuildingType::FarmPlot:
+        case BuildingType::AnimalPen:
+            return 9.0f;
+        case BuildingType::Grave:
+            return 5.0f;
+        default:
+            return 0.0f;
+    }
+}
+
+float Building::GetInfluencePower() const {
+    if (!finished) return 0.0f;
+    switch (type) {
+        case BuildingType::TownCenter:
+            if (tier == 1) return 85.0f;
+            if (tier == 2) return 105.0f;
+            return 125.0f;
+        case BuildingType::Watchtower:
+            return 100.0f;
+        case BuildingType::Outpost:
+            return 85.0f;
+        case BuildingType::BorderTotem:
+            return 65.0f;
+        case BuildingType::Monument:
+            return 45.0f;
+        case BuildingType::Hut:
+        case BuildingType::Kiln:
+        case BuildingType::CraftBench:
+        case BuildingType::Pantry:
+        case BuildingType::FarmPlot:
+        case BuildingType::AnimalPen:
+            return 25.0f;
+        case BuildingType::Grave:
+            return 12.0f;
+        default:
+            return 0.0f;
+    }
+}
+
+bool Building::IsTerritoryAnchor() const {
+    return finished && GetAnchorRadius() > 0.0f;
 }
 
 ResourceCost Building::GetUpgradeCost() const {
@@ -157,6 +225,15 @@ void BuildingManager::Update(float dt, bool isBadWeather, Stockpile& stock, Even
             b.hp = std::max(25.0f, b.hp - baseWear * dt);
         }
     }
+
+    // 4. Zerstörte Gebäude entfernen (ausgenommen TownCenter, das erobert werden kann)
+    for (auto it = buildings_.begin(); it != buildings_.end();) {
+        if (it->finished && it->hp <= 0.0f && it->type != BuildingType::TownCenter) {
+            it = buildings_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 Building* BuildingManager::Get(int id) {
@@ -171,6 +248,20 @@ const Building* BuildingManager::Get(int id) const {
         if (b.id == id) return &b;
     }
     return nullptr;
+}
+
+Building* BuildingManager::GetMainTownCenter() {
+    for (auto& b : buildings_) {
+        if (b.type == BuildingType::TownCenter) return &b;
+    }
+    return buildings_.empty() ? nullptr : &buildings_[0];
+}
+
+const Building* BuildingManager::GetMainTownCenter() const {
+    for (const auto& b : buildings_) {
+        if (b.type == BuildingType::TownCenter) return &b;
+    }
+    return buildings_.empty() ? nullptr : &buildings_[0];
 }
 
 int BuildingManager::GetBuildingCount(BuildingType type, bool finishedOnly) const {
@@ -196,11 +287,18 @@ int BuildingManager::GetMaxTier(BuildingType type) const {
 int BuildingManager::TotalSleepingCapacity() const {
     int total = 0;
     for (const auto& b : buildings_) {
-        if (b.finished && (b.type == BuildingType::Hut || b.type == BuildingType::TownCenter)) {
+        if (b.finished && b.type == BuildingType::Hut) {
             total += b.capacity;
         }
     }
     return total;
+}
+
+bool BuildingManager::HasUnfinishedBuilding() const {
+    for (const auto& b : buildings_) {
+        if (!b.finished || b.underUpgrade) return true;
+    }
+    return false;
 }
 
 int BuildingManager::PlaceBuilding(BuildingType type, Vector2 pos, Stockpile& stock, EventLog& log) {
@@ -224,6 +322,8 @@ int BuildingManager::PlaceBuilding(BuildingType type, Vector2 pos, Stockpile& st
     } else if (type == BuildingType::Watchtower) {
         b.capacity = 1; // 1 Wächter
         b.viewRange = 120.0f;
+        b.hp = 260.0f;
+        b.maxHp = 260.0f;
     } else if (type == BuildingType::Kiln) {
         b.capacity = 1; // 1 Schmelzer / Töpfer
         b.warmthRadius = 38.0f;
@@ -236,6 +336,15 @@ int BuildingManager::PlaceBuilding(BuildingType type, Vector2 pos, Stockpile& st
     } else if (type == BuildingType::Monument) {
         b.capacity = 2;
         b.warmthRadius = 32.0f;
+    } else if (type == BuildingType::BorderTotem) {
+        b.capacity = 0;
+        b.hp = 90.0f;
+        b.maxHp = 90.0f;
+    } else if (type == BuildingType::Outpost) {
+        b.capacity = 1; // 1 Grenzwächter
+        b.hp = 180.0f;
+        b.maxHp = 180.0f;
+        b.viewRange = 100.0f;
     }
 
     ResourceCost cost = b.GetBuildCost();
@@ -362,10 +471,10 @@ int BuildingManager::FindBestShelter(Vector2 from) const {
     float bestScore = -1.0f;
 
     for (const auto& b : buildings_) {
-        if (!b.IsAvailableShelter()) continue;
+        if (!b.IsAvailableShelter() || b.type != BuildingType::Hut) continue;
         float dist = Vector2Distance(from, b.position);
         // Bevorzuge höhere Stufen, aktive Feuerstellen und nähere Gebäude
-        float fireBonus = b.HasActiveFire() ? 90.0f : 0.0f;
+        float fireBonus = b.HasActiveFire() ? 40.0f : 0.0f;
         float score = (float)(b.tier * 200.0f) + fireBonus - dist;
         if (score > bestScore) {
             bestScore = score;
@@ -517,8 +626,10 @@ void BuildingManager::DrawBuilding(const Building& b, float simTime) const {
             case BuildingType::Kiln:       DrawKiln(b, simTime); break;
             case BuildingType::FarmPlot:   DrawFarmPlot(b, simTime); break;
             case BuildingType::AnimalPen:  DrawAnimalPen(b, simTime); break;
-            case BuildingType::Monument:   DrawMonument(b, simTime); break;
-            case BuildingType::Grave:      DrawGrave(b, simTime); break;
+            case BuildingType::Monument:    DrawMonument(b, simTime); break;
+            case BuildingType::Grave:       DrawGrave(b, simTime); break;
+            case BuildingType::BorderTotem: DrawBorderTotem(b, simTime); break;
+            case BuildingType::Outpost:     DrawOutpost(b, simTime); break;
         }
 
         // Baugerüst-Streben während eines laufenden Upgrades auf nächste Epochen-Stufe
@@ -540,9 +651,17 @@ void BuildingManager::DrawBuilding(const Building& b, float simTime) const {
         float barY = y - 29.0f;
         bool isRepair = (b.finished && !b.underUpgrade && b.hp < b.maxHp);
         float pct = isRepair ? std::clamp(b.hp / b.maxHp, 0.0f, 1.0f) : (b.progress / 100.0f);
-        DrawRectangleRec({ x - 12.0f, barY, 24.0f, 3.5f }, Fade(BLACK, 0.75f));
-        DrawRectangleRec({ x - 12.0f, barY, 24.0f * pct, 3.5f }, isRepair ? ORANGE : (b.underUpgrade ? SKYBLUE : GOLD));
-        DrawRectangleLines((int)(x - 12.0f), (int)barY, 24, 4, WHITE);
+        DrawRectangleRec({ x - 14.0f, barY, 28.0f, 4.0f }, Fade(BLACK, 0.85f));
+        DrawRectangleRec({ x - 14.0f, barY, 28.0f * pct, 4.0f }, isRepair ? ORANGE : (b.underUpgrade ? SKYBLUE : GOLD));
+        DrawRectangleLines((int)(x - 14.0f), (int)barY, 28, 5, WHITE);
+
+        // Deutliche Beschriftung des Bauvorhabens ("Hütte (45%)")
+        if (!b.finished || b.underUpgrade) {
+            std::string label = TextFormat("%s (%d%%)", BuildingTypeName(b.type, b.tier), (int)b.progress);
+            int tw = MeasureText(label.c_str(), 9);
+            DrawRectangle((int)(x - tw * 0.5f - 2), (int)(barY - 10), tw + 4, 9, Fade(BLACK, 0.70f));
+            DrawText(label.c_str(), (int)(x - tw * 0.5f), (int)(barY - 9), 9, GOLD);
+        }
     }
 }
 
@@ -862,4 +981,43 @@ void BuildingManager::DrawGrave(const Building& b, float simTime) const {
     // Kleine Grabblume
     DrawPixel((int)x + 3, (int)y, Color{ 245, 195, 70, 255 });
 }
+
+void BuildingManager::DrawBorderTotem(const Building& b, float simTime) const {
+    (void)simTime;
+    float x = b.position.x, y = b.position.y;
+    DrawEllipse((int)x, (int)(y + 2), 7, 3, Fade(BLACK, 0.28f));
+
+    // Steinsockel
+    DrawRectangle((int)(x - 4), (int)(y - 2), 8, 4, Color{ 110, 112, 118, 255 });
+    // Holzstele
+    DrawRectangle((int)(x - 2), (int)(y - 16), 4, 15, Color{ 145, 95, 50, 255 });
+    // Grenzkerben & Bemalung (Rot/Ocker)
+    DrawLineEx({ x - 3.0f, y - 12.0f }, { x + 3.0f, y - 12.0f }, 1.2f, Color{ 215, 65, 55, 255 });
+    DrawLineEx({ x - 3.0f, y - 8.0f }, { x + 3.0f, y - 8.0f }, 1.2f, Color{ 235, 180, 60, 255 });
+    // Schädel / Knochenspitze oben
+    DrawCircleV({ x, y - 17.0f }, 2.5f, Color{ 235, 230, 215, 255 });
+    DrawPixel((int)x - 1, (int)(y - 17), Color{ 50, 40, 35, 255 });
+    DrawPixel((int)x + 1, (int)(y - 17), Color{ 50, 40, 35, 255 });
+}
+
+void BuildingManager::DrawOutpost(const Building& b, float simTime) const {
+    float x = b.position.x, y = b.position.y;
+    DrawEllipse((int)x, (int)(y + 2), 11, 4, Fade(BLACK, 0.32f));
+
+    // Steinquader-Fundament
+    DrawRectangle((int)(x - 8), (int)(y - 5), 16, 6, Color{ 120, 122, 128, 255 });
+    DrawRectangleLines((int)(x - 8), (int)(y - 5), 16, 6, Color{ 75, 78, 85, 255 });
+
+    // Pfahlbau-Hütte / Unterstand
+    DrawRectangle((int)(x - 6), (int)(y - 16), 12, 11, Color{ 150, 105, 55, 255 });
+    // Schräges Ziegeldach / Schindeln
+    DrawTriangle({ x, y - 22.0f }, { x - 9.0f, y - 16.0f }, { x + 9.0f, y - 16.0f }, Color{ 115, 70, 35, 255 });
+
+    // Grenzfeuer / Signalpfahl rechts
+    DrawLineEx({ x + 7.0f, y - 4.0f }, { x + 7.0f, y - 19.0f }, 1.5f, Color{ 90, 60, 30, 255 });
+    float flick = std::sin(simTime * 12.0f) * 0.5f;
+    DrawCircleV({ x + 7.0f, y - 20.0f }, 2.4f + flick * 0.3f, ORANGE);
+    DrawCircleV({ x + 7.0f, y - 21.0f }, 1.2f, YELLOW);
+}
+
 

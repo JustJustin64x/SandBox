@@ -1,5 +1,6 @@
 #include "utility_ai.h"
 #include "caveman.h"
+#include "world.h"
 #include "tribe.h"
 #include "building.h"
 #include "resource_node.h"
@@ -125,12 +126,8 @@ UtilityDecision UtilityAI::Evaluate(const Caveman& agent, const WorldContext& ct
                 float farmScore = std::clamp(basePrio * roleAff * dist, 0.0f, 0.93f);
                 if (farmScore > best.score) {
                     std::string farmReason = (b->type == BuildingType::FarmPlot)
-                        ? (b->IsHarvestReady()
-                            ? TextFormat("Getreide ernten! (Score: %.2f)", farmScore)
-                            : TextFormat("Ackerfeld bestellen (Score: %.2f)", farmScore))
-                        : (b->IsHarvestReady()
-                            ? TextFormat("Tiergehege versorgen & scheren (Score: %.2f)", farmScore)
-                            : TextFormat("Herde füttern (Score: %.2f)", farmScore));
+                        ? (b->IsHarvestReady() ? "Getreide ernten" : "Ackerfeld bestellen")
+                        : (b->IsHarvestReady() ? "Tiergehege versorgen & scheren" : "Herde füttern");
                     best = { CavemanState::GatheringFood, ResourceType::Bush, farmId, -1, -1, farmScore, farmReason };
                 }
             }
@@ -167,7 +164,17 @@ UtilityDecision UtilityAI::Evaluate(const Caveman& agent, const WorldContext& ct
         }
     }
 
-    // 11. Wandern / Verweilen (Fallback)
+    // 11. Grenzkampf, Grenzpatrouille & Kachel-Eroberung (Phase 4: Border Raid)
+    {
+        int tileX = -1, tileY = -1;
+        std::string reason;
+        float score = ScoreBorderRaid(agent, ctx, tileX, tileY, reason);
+        if (score > best.score && tileX >= 0) {
+            best = { CavemanState::BorderRaid, ResourceType::Bush, -1, tileX, tileY, score, reason };
+        }
+    }
+
+    // 12. Wandern / Verweilen (Fallback)
     {
         std::string reason;
         float score = ScoreWander(agent, ctx, reason);
@@ -187,7 +194,7 @@ float UtilityAI::ScoreFlee(const Caveman& agent, const WorldContext& ctx, std::s
     if (!ctx.env) return 0.0f;
     Vector2 hazardCenter = { 0.0f, 0.0f };
     if (ctx.env->IsHazardNear(agent.Position(), 36.0f, hazardCenter)) {
-        outReason = "PANIK: Flucht vor Feuer/Starkstrom! (Score: 1.95)";
+        outReason = "Flieht vor Feuer & Gefahren!";
         return 1.95f;
     }
     return 0.0f;
@@ -200,15 +207,23 @@ float UtilityAI::ScoreEat(const Caveman& agent, const WorldContext& ctx, std::st
     float hunger = agent.Hunger();
     if (hunger < 25.0f) return 0.0f;
 
-    // Altruistische Figuren lassen anderen bei knappen Vorräten eher den Vortritt
-    float altruismFactor = 1.0f - (agent.GetPersonality().altruism * 0.2f);
-    float urgency = std::pow(hunger / 100.0f, 2.2f) * altruismFactor;
+    // Altruistische Figuren lassen anderen bei knappen Vorräten eher den Vortritt, außer bei akutem Hunger
+    float altruismFactor = (hunger >= 75.0f) ? 1.0f : (1.0f - (agent.GetPersonality().altruism * 0.2f));
+    float urgency = std::pow(hunger / 100.0f, 2.0f) * altruismFactor;
     float dist = DistanceFactor(agent.Position(), ctx.tribe.StockpilePosition());
-    float score = std::clamp(urgency * 1.3f * dist, 0.0f, 1.0f);
+
+    // Bei hohem Hunger (Lebensgefahr) darf Distanz die Notwendigkeit zur Nahrungsaufnahme nicht ersticken!
+    if (hunger >= 65.0f) {
+        float blend = std::clamp((hunger - 65.0f) / 35.0f, 0.0f, 1.0f);
+        dist = dist * (1.0f - blend) + 1.0f * blend;
+        urgency *= (1.0f + blend * 0.85f); // Bis zu 1.85x Score-Boost
+    }
+
+    float score = std::clamp(urgency * 1.35f * dist, 0.0f, 1.95f);
 
     outReason = (stock.cookedFood > 0)
-        ? TextFormat("Warme Mahlzeit essen (Score: %.2f - Hunger %.0f%%)", score, hunger)
-        : TextFormat("Rohkost essen (Score: %.2f - Hunger %.0f%%)", score, hunger);
+        ? TextFormat("Warme Mahlzeit essen (Hunger: %.0f%%)", hunger)
+        : TextFormat("Rohkost essen (Hunger: %.0f%%)", hunger);
     return score;
 }
 
@@ -216,7 +231,12 @@ float UtilityAI::ScoreSleep(const Caveman& agent, const WorldContext& ctx, int& 
     float tiredness = agent.Tiredness();
     float ap = agent.Ap();
 
-    if (tiredness < 35.0f && ap > 40.0f) return 0.0f;
+    bool isNight = (ctx.timeOfDay > 0.72f || ctx.timeOfDay < 0.22f);
+    if (isNight) {
+        if (tiredness < 45.0f && ap >= 25.0f) return 0.0f;
+    } else {
+        if (tiredness < 70.0f && ap >= 15.0f) return 0.0f;
+    }
 
     float tirednessNorm = tiredness / 100.0f;
     float apExhaustion = (100.0f - ap) / 100.0f;
@@ -231,7 +251,9 @@ float UtilityAI::ScoreSleep(const Caveman& agent, const WorldContext& ctx, int& 
     if (agent.Hunger() >= cfg::kHungerCritical) urgency *= 0.3f;
 
     float score = std::clamp(urgency * shelterBonus, 0.0f, 0.98f);
-    outReason = TextFormat("Schlafen (Score: %.2f - Müdigkeit %.0f%%)", score, tiredness);
+    outReason = (outHutId >= 0)
+        ? TextFormat("Schlafen in Hütte (Müdigkeit: %.0f%%)", tiredness)
+        : TextFormat("Am Feuer ausruhen (Müdigkeit: %.0f%%)", tiredness);
     return score;
 }
 
@@ -248,8 +270,8 @@ float UtilityAI::ScoreWarmUp(const Caveman& agent, const WorldContext& ctx, int&
             float score = std::clamp(basePrio * dist, 0.0f, 0.96f);
             outShelterId = fireNeedingFuel;
             outReason = (fire->fuel <= 0.0f)
-                ? TextFormat("Feuer neu entzünden! (Score: %.2f)", score)
-                : TextFormat("Brennholz nachlegen (Score: %.2f - %d%% Glut)", score, (int)fire->fuel);
+                ? "Feuer neu entzünden!"
+                : TextFormat("Brennholz nachlegen (%d%% Glut)", (int)fire->fuel);
             return score;
         }
     }
@@ -263,7 +285,7 @@ float UtilityAI::ScoreWarmUp(const Caveman& agent, const WorldContext& ctx, int&
             float dist = DistanceFactor(agent.Position(), targetPos);
             float cookScore = std::clamp(((agent.GetRole() == Role::Elder) ? 0.74f : 0.60f) * dist, 0.0f, 0.80f);
             if (agent.Warmth() > 60.0f) {
-                outReason = TextFormat("Am Feuer kochen (Score: %.2f)", cookScore);
+                outReason = "Kocht Mahlzeiten am Feuer";
                 return cookScore;
             }
         }
@@ -277,7 +299,7 @@ float UtilityAI::ScoreWarmUp(const Caveman& agent, const WorldContext& ctx, int&
                 float dist = DistanceFactor(agent.Position(), mon->position);
                 float monScore = std::clamp((0.76f + (55.0f - agent.Morale()) * 0.004f) * dist, 0.0f, 0.85f);
                 outShelterId = monId;
-                outReason = TextFormat("Andacht an %s (Score: %.2f)", mon->DisplayName().c_str(), monScore);
+                outReason = TextFormat("Andacht an %s", mon->DisplayName().c_str());
                 return monScore;
             }
         }
@@ -296,10 +318,17 @@ float UtilityAI::ScoreWarmUp(const Caveman& agent, const WorldContext& ctx, int&
     Vector2 targetPos = (outShelterId >= 0) ? ctx.tribe.Buildings().Get(outShelterId)->position : ctx.tribe.CampPosition();
     float dist = DistanceFactor(agent.Position(), targetPos);
 
-    float score = std::clamp(urgency * 1.25f * dist, 0.0f, 0.99f);
+    // Bei akuter Unterkühlung (< 45%) darf weite Entfernung das Aufsuchen des Feuers nicht verhindern
+    if (warmth < 45.0f) {
+        float blend = std::clamp((45.0f - warmth) / 45.0f, 0.0f, 1.0f);
+        dist = dist * (1.0f - blend) + 1.0f * blend;
+        urgency *= (1.0f + blend * 0.90f);
+    }
+
+    float score = std::clamp(urgency * 1.35f * dist, 0.0f, 1.95f);
     outReason = badWeather
-        ? TextFormat("Schutz vor Unwetter & Kälte (Score: %.2f - Wärme %.0f%%)", score, warmth)
-        : TextFormat("Aufwärmen (Score: %.2f - Wärme nur %.0f%%)", score, warmth);
+        ? TextFormat("Schutz vor Unwetter (Wärme: %.0f%%)", warmth)
+        : TextFormat("Aufwärmen am Feuer (Wärme: %.0f%%)", warmth);
     return score;
 }
 
@@ -312,6 +341,8 @@ float UtilityAI::ScoreSocial(const Caveman& agent, const WorldContext& ctx, int&
 
     for (const auto& other : *ctx.allCavemen) {
         if (other.Id() == agent.Id() || other.IsDead()) continue;
+        // Territoriale Beschränkung: Alltägliche Sozialaktionen nur innerhalb des eigenen Clans
+        if (other.ClanId() != agent.ClanId()) continue;
 
         std::string reason;
         float scoreSoc = SocialActionEvaluator::ScoreSocialize(agent, other, ctx, reason);
@@ -349,26 +380,42 @@ float UtilityAI::ScoreSocial(const Caveman& agent, const WorldContext& ctx, int&
 }
 
 float UtilityAI::ScoreGatherFood(const Caveman& agent, const WorldContext& ctx, int& outNodeId, std::string& outReason) {
-    outNodeId = ctx.resources.FindBest(ResourceType::Bush, agent.Position());
+    const Stockpile& stock = ctx.tribe.Stock();
+    int totalFood = stock.food + stock.cookedFood;
+
+    // Rollen-Disziplin: Jäger pflücken KEINE Beeren, solange Vorräte oder Wildtiere existieren!
+    if (agent.GetRole() == Role::Hunter) {
+        int availAnimals = ctx.resources.CountAvailable(ResourceType::Animal);
+        if (totalFood > 0 || availAnimals > 0) {
+            return 0.0f;
+        }
+    }
+
+    int reserveTarget = ctx.population * cfg::kFoodReservePerMember;
+    bool allowNeutral = (totalFood < std::max(4, reserveTarget / 2)) || (agent.Hunger() >= 55.0f);
+    outNodeId = ctx.resources.FindBest(ResourceType::Bush, agent.Position(), &ctx.world, agent.ClanId(), allowNeutral,
+                                       [&](int id) { return agent.IsNodeBlacklisted(id); });
     if (outNodeId < 0) return 0.0f;
 
     const auto* node = ctx.resources.Get(outNodeId);
     if (!node) return 0.0f;
 
-    const Stockpile& stock = ctx.tribe.Stock();
-    int totalFood = stock.food + stock.cookedFood;
-    int reserveTarget = ctx.population * cfg::kFoodReservePerMember;
     float colonyNeed = (totalFood < reserveTarget) ?
         (float)(reserveTarget - totalFood) / (float)reserveTarget : 0.1f;
 
     float personalNeed = agent.Hunger() / 100.0f;
     float roleAffinity = (agent.GetRole() == Role::Gatherer) ? 1.4f :
-                         (agent.GetRole() == Role::Hunter) ? 0.6f : 1.0f;
+                         (agent.GetRole() == Role::Hunter) ? 0.7f : 1.0f;
+
+    if (agent.Hunger() >= 55.0f || totalFood == 0) {
+        roleAffinity = std::max(roleAffinity, 1.4f);
+        personalNeed = std::pow(agent.Hunger() / 100.0f, 1.35f) * 1.3f;
+    }
 
     float dist = DistanceFactor(agent.Position(), node->position);
-    float score = std::clamp((colonyNeed * 0.6f + personalNeed * 0.4f) * roleAffinity * dist, 0.0f, 0.92f);
+    float score = std::clamp((colonyNeed * 0.5f + personalNeed * 0.65f) * roleAffinity * dist, 0.0f, 1.6f);
 
-    outReason = TextFormat("Beeren sammeln (Score: %.2f - Vorrat: %d/%d)", score, totalFood, reserveTarget);
+    outReason = TextFormat("Beeren pflücken (Vorrat: %d, Hunger: %.0f%%)", totalFood, agent.Hunger());
     return score;
 }
 
@@ -376,7 +423,8 @@ float UtilityAI::ScoreHunt(const Caveman& agent, const WorldContext& ctx, int& o
     const RoleTraits& traits = GetRoleTraits(agent.GetRole());
     if (!traits.canHunt) return 0.0f;
 
-    outNodeId = ctx.resources.FindBest(ResourceType::Animal, agent.Position());
+    outNodeId = ctx.resources.FindBest(ResourceType::Animal, agent.Position(), &ctx.world, agent.ClanId(), true,
+                                       [&](int id) { return agent.IsNodeBlacklisted(id); });
     if (outNodeId < 0) return 0.0f;
 
     const auto* node = ctx.resources.Get(outNodeId);
@@ -386,33 +434,34 @@ float UtilityAI::ScoreHunt(const Caveman& agent, const WorldContext& ctx, int& o
     int totalFood = stock.food + stock.cookedFood;
     int reserveTarget = ctx.population * cfg::kFoodReservePerMember;
     float colonyNeed = (totalFood < reserveTarget) ?
-        (float)(reserveTarget - totalFood) / (float)reserveTarget : 0.15f;
+        (float)(reserveTarget - totalFood) / (float)reserveTarget : 0.35f;
 
-    // Zusätzlicher Jagd-Anreiz, wenn Felle für Kleidung fehlen
     if (stock.hides < 3 && agent.GetClothing() == ClothingTier::None) {
-        colonyNeed = std::max(colonyNeed, 0.55f);
+        colonyNeed = std::max(colonyNeed, 0.65f);
     }
 
-    float roleAffinity = (agent.GetRole() == Role::Hunter) ? 1.5f : 0.7f;
+    float roleAffinity = (agent.GetRole() == Role::Hunter) ? 2.4f : 0.7f;
     float dist = DistanceFactor(agent.Position(), node->position);
 
-    float score = std::clamp(colonyNeed * 1.1f * roleAffinity * dist, 0.0f, 0.95f);
-    outReason = TextFormat("Jagen (Score: %.2f - Fleisch & Fell)", score);
+    float score = std::clamp(colonyNeed * 1.1f * roleAffinity * dist, 0.0f, 1.4f);
+    outReason = TextFormat("Sucht Wildtiere (Fleisch & Vorrat: %d)", totalFood);
     return score;
 }
 
 float UtilityAI::ScoreGatherWood(const Caveman& agent, const WorldContext& ctx, int& outNodeId, std::string& outReason) {
-    outNodeId = ctx.resources.FindBest(ResourceType::Tree, agent.Position());
-    if (outNodeId < 0) return 0.0f;
-
-    const auto* node = ctx.resources.Get(outNodeId);
-    if (!node) return 0.0f;
-
     const Stockpile& stock = ctx.tribe.Stock();
     ResourceCost deficit = ctx.tribe.GetPlannedResourceDeficit();
     bool needsHuts = ctx.tribe.NeedsMoreHuts(ctx.population);
     bool hasSite = ctx.tribe.Buildings().FindActiveConstructionSite(agent.Position()) >= 0;
     bool fireNeedsWood = (ctx.tribe.Buildings().FindFireNeedingFuel(agent.Position()) >= 0 && stock.wood < 3);
+
+    bool allowNeutralWood = (stock.wood < 5) || (deficit.wood > 0) || fireNeedsWood;
+    outNodeId = ctx.resources.FindBest(ResourceType::Tree, agent.Position(), &ctx.world, agent.ClanId(), allowNeutralWood,
+                                       [&](int id) { return agent.IsNodeBlacklisted(id); });
+    if (outNodeId < 0) return 0.0f;
+
+    const auto* node = ctx.resources.Get(outNodeId);
+    if (!node) return 0.0f;
 
     float need = 0.15f;
     if (fireNeedsWood) need += 0.65f;
@@ -425,24 +474,26 @@ float UtilityAI::ScoreGatherWood(const Caveman& agent, const WorldContext& ctx, 
 
     float score = std::clamp(need * roleAffinity * dist, 0.0f, 0.92f);
     if (fireNeedsWood) {
-        outReason = TextFormat("Brennholz für Lagerfeuer holen! (Score: %.2f)", score);
+        outReason = "Brennholz für Lagerfeuer beschaffen";
     } else if (deficit.wood > 0) {
-        outReason = TextFormat("Holzhacken für %s (Score: %.2f)", ctx.tribe.CurrentPlan().description.c_str(), score);
+        outReason = TextFormat("Holz hacken für %s", ctx.tribe.CurrentPlan().description.c_str());
     } else {
-        outReason = TextFormat("Holzhacken (Score: %.2f - Holz: %d)", score, stock.wood);
+        outReason = TextFormat("Holz hacken (Holzvorrat: %d)", stock.wood);
     }
     return score;
 }
 
 float UtilityAI::ScoreGatherStone(const Caveman& agent, const WorldContext& ctx, int& outNodeId, std::string& outReason) {
-    outNodeId = ctx.resources.FindBest(ResourceType::Rock, agent.Position());
+    const Stockpile& stock = ctx.tribe.Stock();
+    ResourceCost deficit = ctx.tribe.GetPlannedResourceDeficit();
+    bool allowNeutralStone = (stock.stone < 5 || deficit.stone > 0 || deficit.bricks > 0);
+    outNodeId = ctx.resources.FindBest(ResourceType::Rock, agent.Position(), &ctx.world, agent.ClanId(), allowNeutralStone,
+                                       [&](int id) { return agent.IsNodeBlacklisted(id); });
     if (outNodeId < 0) return 0.0f;
 
     const auto* node = ctx.resources.Get(outNodeId);
     if (!node) return 0.0f;
 
-    const Stockpile& stock = ctx.tribe.Stock();
-    ResourceCost deficit = ctx.tribe.GetPlannedResourceDeficit();
     bool needsHuts = ctx.tribe.NeedsMoreHuts(ctx.population);
     bool hasSite = ctx.tribe.Buildings().FindActiveConstructionSite(agent.Position()) >= 0;
 
@@ -450,7 +501,6 @@ float UtilityAI::ScoreGatherStone(const Caveman& agent, const WorldContext& ctx,
     if (deficit.stone > 0 || deficit.bricks > 0) need += 0.55f;
     else if (hasSite || needsHuts) need += 0.45f;
     if (stock.stone < 6) need += 0.35f;
-    // Wenn Steinklingen ("flint") noch erforscht wird oder eigenes Werkzeug fehlt -> Feuersteine suchen!
     if (!ctx.tribe.Skills().IsUnlocked("flint") || agent.GetToolTier() == ToolTier::BareHands) {
         need += 0.28f;
     }
@@ -460,8 +510,8 @@ float UtilityAI::ScoreGatherStone(const Caveman& agent, const WorldContext& ctx,
 
     float score = std::clamp(need * roleAffinity * dist, 0.0f, 0.88f);
     outReason = (deficit.stone > 0)
-        ? TextFormat("Steinbruch für %s (Score: %.2f)", ctx.tribe.CurrentPlan().description.c_str(), score)
-        : TextFormat("Steine & Flint sammeln (Score: %.2f - Stein: %d)", score, stock.stone);
+        ? TextFormat("Steine schlagen für %s", ctx.tribe.CurrentPlan().description.c_str())
+        : TextFormat("Steine & Flint suchen (Stein: %d)", stock.stone);
     return score;
 }
 
@@ -484,8 +534,8 @@ float UtilityAI::ScoreBuild(const Caveman& agent, const WorldContext& ctx, int& 
     float score = std::clamp(basePriority * traits.buildEfficiency * dist, 0.0f, 0.95f);
 
     outReason = isRepair
-        ? TextFormat("Reparieren (Score: %.2f - %s)", score, b->DisplayName().c_str())
-        : TextFormat("Bauen (Score: %.2f - %s)", score, b->DisplayName().c_str());
+        ? TextFormat("Repariert %s", b->DisplayName().c_str())
+        : TextFormat("Baut %s", b->DisplayName().c_str());
     return score;
 }
 
@@ -507,7 +557,6 @@ float UtilityAI::ScoreCraft(const Caveman& agent, const WorldContext& ctx, int& 
     bool needsExpGear = (skills.IsUnlocked("torches") && stock.torches < 3 && stock.wood >= 1) ||
                         (skills.IsUnlocked("flint") && stock.pickaxes < 2 && stock.wood >= 1 && stock.stone >= 1);
 
-    // Prüfen, ob eine Nicht-POI-Technologie an der Werkbank durch Tüfteln erforscht werden kann
     bool canPracticeTech = false;
     for (const auto& n : skills.AllNodes()) {
         if (!n.requiresPOI && n.state == TechState::Ready) {
@@ -530,16 +579,15 @@ float UtilityAI::ScoreCraft(const Caveman& agent, const WorldContext& ctx, int& 
     float score = std::clamp(priority * dist, 0.0f, 0.89f);
 
     outReason = needsGear
-        ? TextFormat("Werkzeug/Kleidung fertigen (Score: %.2f)", score)
-        : TextFormat("Werkbank & Forschung (Score: %.2f)", score);
+        ? "Fertigt Ausrüstung an Werkbank"
+        : "Tüftelt an der Werkbank";
     return score;
 }
-
 
 float UtilityAI::ScoreWander(const Caveman& agent, const WorldContext& ctx, std::string& outReason) {
     (void)ctx;
     float baseScore = (agent.GetRole() == Role::Child) ? 0.22f : 0.08f;
-    outReason = TextFormat("Erkunden / Verweilen (Score: %.2f)", baseScore);
+    outReason = "Erkundet die nähere Umgebung";
     return baseScore;
 }
 
@@ -600,5 +648,51 @@ float UtilityAI::ScoreExpedition(const Caveman& agent, const WorldContext& ctx, 
 
     outReason = TextFormat("Expedition nach '%s' (Score: %.2f)", poi->name.c_str(), finalScore);
     return finalScore;
+}
+
+float UtilityAI::ScoreBorderRaid(const Caveman& agent, const WorldContext& ctx, int& outTileX, int& outTileY, std::string& outReason) {
+    if (agent.GetRole() == Role::Child) return 0.0f;
+    if (agent.Hp() < 50.0f) return 0.0f;
+
+    auto contacts = ctx.world.GetBorderContacts(agent.ClanId());
+    if (contacts.empty()) return 0.0f;
+
+    // Finde den Nachbar-Clan mit höchster Grenzberührung / Reibung
+    const BorderContact* bestContact = nullptr;
+    int maxBorderTiles = 0;
+    for (const auto& bc : contacts) {
+        if (bc.sharedBorderTiles > maxBorderTiles && !bc.contactTiles.empty()) {
+            maxBorderTiles = bc.sharedBorderTiles;
+            bestContact = &bc;
+        }
+    }
+    if (!bestContact || bestContact->contactTiles.empty()) return 0.0f;
+
+    // Faktoren für Grenzaggression (Phase 4.1):
+    // 1. Ressourcenknappheit (Hunger, Mangel an Vorräten erhöht Aggression)
+    const Stockpile& stock = ctx.tribe.Stock();
+    float scarcity = 0.0f;
+    if (stock.food < ctx.population * 2) scarcity += 0.35f;
+    if (stock.wood < 5) scarcity += 0.20f;
+    if (stock.stone < 4) scarcity += 0.20f;
+
+    // 2. Persönlichkeit (Aggression & Dominanz) und Rolle (Jäger patrouillieren/kämpfen vorrangig)
+    float aggression = agent.GetPersonality().aggression * 0.35f + agent.GetPersonality().dominance * 0.25f;
+    float roleBonus = (agent.GetRole() == Role::Hunter) ? 0.30f : (agent.GetRole() == Role::Elder ? 0.10f : 0.05f);
+
+    // 3. Waffen-Bonus
+    float weaponBonus = (agent.GetWeaponTier() >= WeaponTier::FlintSpear) ? 0.15f : 0.0f;
+
+    float score = std::clamp(scarcity * 0.45f + aggression + roleBonus + weaponBonus, 0.0f, 0.85f);
+    if (score < 0.45f) return 0.0f;
+
+    // Wähle eine umkämpfte Grenzkachel
+    int pickIdx = GetRandomValue(0, (int)bestContact->contactTiles.size() - 1);
+    outTileX = bestContact->contactTiles[pickIdx].first;
+    outTileY = bestContact->contactTiles[pickIdx].second;
+
+    outReason = TextFormat("Grenzüberfall: Sichert umkämpfte Grenzkachel (%d, %d) gegen Nachbarn! (Score: %.2f)",
+                           outTileX, outTileY, score);
+    return score;
 }
 

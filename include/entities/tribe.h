@@ -39,6 +39,12 @@ class Tribe {
 public:
     explicit Tribe(Vector2 campPosition);
 
+    struct ProceduralClanInfo {
+        std::string name;
+        Color color;
+    };
+    static ProceduralClanInfo GenerateProceduralClan(int id, Vector2 location, const World& world);
+
     int Id() const { return id_; }
     const std::string& Name() const { return name_; }
     Color FactionColor() const { return factionColor_; }
@@ -46,7 +52,11 @@ public:
         id_ = id;
         name_ = name;
         factionColor_ = color;
+        hierarchy_.InitClan(id, name, color);
     }
+
+    bool IsFormed() const { return isFormed_; }
+    void SetFormed(bool formed) { isFormed_ = formed; }
 
     void InitWorld(const World& world);
 
@@ -95,7 +105,19 @@ public:
     ResourceCost GetPlannedResourceDeficit() const;
     bool FindBuildingSpotAround(const World& world, Vector2 center, Vector2& out) const;
 
-    // --- Territorien-Visualisierung (Stufe 4: Fraktions-Overlay) -------------
+    // --- Territorien-Visualisierung, Kapazität & Expansion (Phase 1, 2 & 3) --
+    struct ExpansionTarget {
+        bool active = false;
+        Vector2 position = { 0.0f, 0.0f };
+        std::string reason;
+    };
+
+    int MaxTerritoryCapacity() const { return maxTerritoryCapacity_; }
+    int CurrentTerritoryCount() const { return currentTerritoryCount_; }
+    void SetCurrentTerritoryCount(int count) { currentTerritoryCount_ = count; }
+    void UpdateEmpireCapacity(const std::vector<Caveman>& cavemen);
+    void UpdateStrategicExpansionPlan(const World& world);
+    const ExpansionTarget& GetExpansionTarget() const { return expansionTarget_; }
     void DrawTerritoryOverlay(const World& world, float simTime) const;
 
     // --- Veredelung an der Werkbank ------------------------------------------
@@ -117,8 +139,13 @@ private:
 
     Vector2 campPos_;
     int id_ = 1;
-    std::string name_ = "Sonnen-Clan";
+    std::string name_ = "Ur-Sippe";
     Color factionColor_ = Color{ 215, 50, 50, 255 };
+    bool isFormed_ = false;
+    float formationTimer_ = 0.0f;
+    int maxTerritoryCapacity_ = 35;
+    int currentTerritoryCount_ = 0;
+    ExpansionTarget expansionTarget_;
     Stockpile stock_;
     BuildingManager buildings_;
     AgeManager age_;

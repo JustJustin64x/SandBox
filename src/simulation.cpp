@@ -45,12 +45,28 @@ Simulation::Simulation(int worldWidth, int worldHeight, int screenWidth, int scr
     RegenerateWorld(4242u);
 }
 
+Tribe* Simulation::GetTribe(int id) {
+    for (auto& t : tribes_) {
+        if (t->Id() == id) return t.get();
+    }
+    if (!tribes_.empty()) return tribes_[0].get();
+    return nullptr;
+}
+
+const Tribe* Simulation::GetTribe(int id) const {
+    for (const auto& t : tribes_) {
+        if (t->Id() == id) return t.get();
+    }
+    if (!tribes_.empty()) return tribes_[0].get();
+    return nullptr;
+}
+
 Tribe& Simulation::CurrentUiTribe() {
     if (selectedCavemanId_ != -1) {
         for (const auto& c : cavemen_) {
             if (c.Id() == selectedCavemanId_) {
-                int idx = std::clamp(c.ClanId() - 1, 0, (int)tribes_.size() - 1);
-                return *tribes_[idx];
+                Tribe* tr = GetTribe(c.ClanId());
+                if (tr) return *tr;
             }
         }
     }
@@ -62,8 +78,8 @@ const Tribe& Simulation::CurrentUiTribe() const {
     if (selectedCavemanId_ != -1) {
         for (const auto& c : cavemen_) {
             if (c.Id() == selectedCavemanId_) {
-                int idx = std::clamp(c.ClanId() - 1, 0, (int)tribes_.size() - 1);
-                return *tribes_[idx];
+                const Tribe* tr = GetTribe(c.ClanId());
+                if (tr) return *tr;
             }
         }
     }
@@ -79,37 +95,64 @@ int Simulation::GetAliveCount() const {
     return alive;
 }
 
-void Simulation::SpawnCaveman(Role role, Vector2 worldPos, int preferredClanId, Color clanColor) {
+void Simulation::SpawnCaveman(Role role, Vector2 worldPos, int preferredClanId, Color clanColor, Gender gender) {
     if (!world_.IsWalkable(worldPos)) return;
     int id = nextCavemanId_++;
-    cavemen_.emplace_back(id, RoleDefaultNames(role, id), role, worldPos);
+    cavemen_.emplace_back(id, RoleDefaultNames(role, id), role, worldPos, gender);
 
-    int tribeIdx = std::clamp(preferredClanId - 1, 0, (int)tribes_.size() - 1);
-    Tribe& tr = *tribes_[tribeIdx];
+    Tribe* assignedTribe = nullptr;
+    if (preferredClanId > 0) {
+        assignedTribe = GetTribe(preferredClanId);
+    } else {
+        // Nächstgelegenen Clan innerhalb von <= 12 Kacheln (192px) zum Einflussbereich/Camp suchen
+        float closestDist = 12.0f * TILE_SIZE;
+        for (const auto& tr : tribes_) {
+            float dist = Vector2Distance(worldPos, tr->CampPosition());
+            int tx = World::ToTile(worldPos.x);
+            int ty = World::ToTile(worldPos.y);
+            if (world_.GetOwnerTribeId(tx, ty) == tr->Id()) {
+                dist = 0.0f; // Liegt direkt im Clan-Territorium
+            }
+            if (dist <= closestDist) {
+                closestDist = dist;
+                assignedTribe = tr.get();
+            }
+        }
+    }
 
-    tr.Hierarchy().AssignToClan(id, (int)role, preferredClanId);
-    int clanId = preferredClanId > 0 ? preferredClanId : tr.Hierarchy().GetClanId(id);
-    const Clan* clan = tr.Hierarchy().GetClan(clanId);
-    std::string clanName = clan ? clan->name : tr.Name();
-    Color bColor = (clanColor.a > 0) ? clanColor : (clan ? clan->bannerColor : tr.FactionColor());
+    if (assignedTribe) {
+        int clanId = assignedTribe->Id();
+        assignedTribe->Hierarchy().AssignToClan(id, (int)role, clanId);
+        const Clan* clan = assignedTribe->Hierarchy().GetClan(clanId);
+        std::string clanName = assignedTribe->Name();
+        Color bColor = (clanColor.a > 0) ? clanColor : (clan ? clan->bannerColor : assignedTribe->FactionColor());
+        SocialRank rank = assignedTribe->Hierarchy().GetRank(id);
+        Vector2 homeCamp = assignedTribe->CampPosition();
+        cavemen_.back().SyncSocialVisuals(clanId, bColor, (int)rank, homeCamp);
 
-    SocialRank rank = tr.Hierarchy().GetRank(id);
-    Vector2 homeCamp = tr.CampPosition();
-    cavemen_.back().SyncSocialVisuals(clanId, bColor, (int)rank, homeCamp);
-
-    eventLog_.Add(TextFormat("%s (%s) ist dem %s beigetreten", RoleDefaultNames(role, id), RoleName(role), clanName.c_str()),
-                  bColor);
+        eventLog_.Add(TextFormat("%s (%s %s) hat sich dem %s angeschlossen",
+                                 RoleDefaultNames(role, id), RoleName(role), cavemen_.back().GenderSymbol(), clanName.c_str()),
+                      bColor);
+    } else {
+        // Freier Einzelgänger / Wanderer in der Wildnis
+        cavemen_.back().SyncSocialVisuals(-1, WHITE, (int)SocialRank::Outcast, worldPos);
+        eventLog_.Add(TextFormat("%s (%s %s) durchstreift die Wildnis als freier Wanderer",
+                                 RoleDefaultNames(role, id), RoleName(role), cavemen_.back().GenderSymbol()),
+                      LIGHTGRAY);
+    }
 }
 
 void Simulation::SpawnChildFromParents(Caveman& parentA, Caveman& parentB, Vector2 spawnPos) {
     int id = nextCavemanId_++;
     Personality childPers = Personality::Inherit(parentA.GetPersonality(), parentB.GetPersonality());
-    cavemen_.emplace_back(id, RoleDefaultNames(Role::Child, id), Role::Child, spawnPos);
+    Gender childGender = (GetRandomValue(0, 1) == 0) ? Gender::Male : Gender::Female;
+    cavemen_.emplace_back(id, RoleDefaultNames(Role::Child, id), Role::Child, spawnPos, childGender);
     cavemen_.back().SetPersonality(childPers);
 
     int parentClanId = parentA.ClanId();
-    int tIdx = std::clamp(parentClanId - 1, 0, (int)tribes_.size() - 1);
-    Tribe& tr = *tribes_[tIdx];
+    Tribe* trPtr = GetTribe(parentClanId);
+    if (!trPtr) trPtr = tribes_[0].get();
+    Tribe& tr = *trPtr;
 
     tr.Hierarchy().AssignToClan(id, (int)Role::Child, parentClanId);
 
@@ -269,25 +312,16 @@ void Simulation::RegenerateWorld(uint32_t seed) {
     selectedCavemanId_ = -1;
     activeTribeIndex_ = 0;
 
-    // Finde 4 strategisch ideale Standorte für die unabhängigen Stämme (Phase 3)
-    std::vector<Vector2> spawnLocs = FindTribeSpawnLocations(4);
+    // 2.1 & 2.2: Dynamische prozedurale Clans (2 bis 4 Ur-Gruppen)
+    int numClans = GetRandomValue(2, 4);
+    std::vector<Vector2> spawnLocs = FindTribeSpawnLocations(numClans);
 
-    struct TribeDef {
-        int id;
-        const char* name;
-        Color color;
-    };
-    static const TribeDef kDefs[4] = {
-        { 1, "Sonnen-Clan",   Color{ 215, 50,  50,  255 } }, // Karmesinrot
-        { 2, "Flusswächter",  Color{ 45,  120, 225, 255 } }, // Kobaltblau
-        { 3, "Waldläufer",    Color{ 40,  175, 75,  255 } }, // Smaragdgrün
-        { 4, "Felsenvolk",    Color{ 225, 170, 35,  255 } }  // Ockergelb
-    };
-
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < (int)spawnLocs.size(); ++i) {
+        Tribe::ProceduralClanInfo info = Tribe::GenerateProceduralClan(i + 1, spawnLocs[i], world_);
         auto tr = std::make_unique<Tribe>(spawnLocs[i]);
-        tr->SetIdentity(kDefs[i].id, kDefs[i].name, kDefs[i].color);
+        tr->SetIdentity(i + 1, info.name, info.color);
         tr->InitWorld(world_);
+        world_.InitStartingTerritory(i + 1, spawnLocs[i], 52);
         tribes_.push_back(std::move(tr));
     }
 
@@ -295,31 +329,50 @@ void Simulation::RegenerateWorld(uint32_t seed) {
     resources_.Populate(world_, tribes_[0]->CampPosition());
     env_.InitDemoPhenomena(world_);
 
-    // 8-10 Cavemen pro Stamm eng geklüngelt (2-4 Kacheln) um das jeweilige Lagerfeuer spawnen
+    // TEIL 3: Drastische Reduktion der Start-Population (Max. 8–18 Menschen insgesamt!)
+    // Jede Ur-Gruppe startet mit nur 3 bis maximal 5 Menschen eng um das Lagerfeuer
     for (size_t t = 0; t < tribes_.size(); ++t) {
         Vector2 camp = tribes_[t]->CampPosition();
         int clanId = tribes_[t]->Id();
         Color cColor = tribes_[t]->FactionColor();
 
-        // 4 Jäger
-        for (int i = 0; i < 4; ++i) {
-            Vector2 pos;
-            if (world_.FindRandomWalkablePosition(camp, 45.0f, pos, 30)) {
-                SpawnCaveman(Role::Hunter, pos, clanId, cColor);
-            }
-        }
-        // 4 Sammler
-        for (int i = 0; i < 4; ++i) {
-            Vector2 pos;
-            if (world_.FindRandomWalkablePosition(camp, 45.0f, pos, 30)) {
-                SpawnCaveman(Role::Gatherer, pos, clanId, cColor);
-            }
-        }
-        // 1 Ältester
+        // 3 bis 5 Menschen pro Ur-Gruppe (bei 4 Gruppen 3-4, bei 2-3 Gruppen bis 5)
+        int groupSize = (tribes_.size() >= 4) ? GetRandomValue(3, 4) : GetRandomValue(3, 5);
+
+        // 1. Jäger (Männlich)
         Vector2 pos;
-        if (world_.FindRandomWalkablePosition(camp, 35.0f, pos, 30)) {
-            SpawnCaveman(Role::Elder, pos, clanId, cColor);
+        if (world_.FindRandomWalkablePosition(camp, 25.0f, pos, 30)) {
+            SpawnCaveman(Role::Hunter, pos, clanId, cColor, Gender::Male);
         }
+        // 2. Sammlerin (Weiblich)
+        if (world_.FindRandomWalkablePosition(camp, 25.0f, pos, 30)) {
+            SpawnCaveman(Role::Gatherer, pos, clanId, cColor, Gender::Female);
+        }
+        // 3. Weiterer Sammler oder Ältester
+        Role thirdRole = (GetRandomValue(0, 100) < 40) ? Role::Elder : Role::Gatherer;
+        Gender g3 = (GetRandomValue(0, 1) == 0) ? Gender::Male : Gender::Female;
+        if (world_.FindRandomWalkablePosition(camp, 25.0f, pos, 30)) {
+            SpawnCaveman(thirdRole, pos, clanId, cColor, g3);
+        }
+        // 4. Optional: Jäger oder Sammler
+        if (groupSize >= 4) {
+            Role r4 = (GetRandomValue(0, 100) < 50) ? Role::Hunter : Role::Gatherer;
+            Gender g4 = (r4 == Role::Hunter) ? Gender::Male : ((GetRandomValue(0, 1) == 0) ? Gender::Male : Gender::Female);
+            if (world_.FindRandomWalkablePosition(camp, 25.0f, pos, 30)) {
+                SpawnCaveman(r4, pos, clanId, cColor, g4);
+            }
+        }
+        // 5. Optional: Heranwachsender oder Ältester
+        if (groupSize >= 5) {
+            Role r5 = (GetRandomValue(0, 100) < 60) ? Role::Child : Role::Elder;
+            Gender g5 = (GetRandomValue(0, 1) == 0) ? Gender::Male : Gender::Female;
+            if (world_.FindRandomWalkablePosition(camp, 25.0f, pos, 30)) {
+                SpawnCaveman(r5, pos, clanId, cColor, g5);
+            }
+        }
+
+        // Initiale autonome Anführer-Bestimmung (Schaukampf / Wahl / Ältestenrat)
+        tribes_[t]->Hierarchy().ElectLeader(cavemen_, tribes_[t]->Relationships(), eventLog_, cColor, tribes_[t]->Name());
     }
 
     // Zusätzliche Wildtiere
@@ -331,7 +384,8 @@ void Simulation::RegenerateWorld(uint32_t seed) {
     }
 
     camera_.SetTarget(tribes_[0]->CampPosition());
-    eventLog_.Add(TextFormat("4 unabhängige Zivilisationen gegründet! Seed: %u", seed), GOLD);
+    eventLog_.Add(TextFormat("%d Ur-Gruppen besiedeln die Wildnis (Start-Population: %d Menschen)! Seed: %u",
+                             (int)tribes_.size(), (int)cavemen_.size(), seed), GOLD);
 }
 
 void Simulation::SetCurrentAction(SelectedAction action) {
@@ -349,6 +403,8 @@ void Simulation::SetCurrentAction(SelectedAction action) {
         case SelectedAction::TERRAIN_FOREST:
             selectedTile_ = TILE_FOREST;
             break;
+        case SelectedAction::SPAWN_MAN:
+        case SelectedAction::SPAWN_WOMAN:
         case SelectedAction::SPAWN_HUNTER:
         case SelectedAction::SPAWN_ANIMAL:
         case SelectedAction::IGNITE_FIRE:
@@ -384,11 +440,13 @@ void Simulation::HandleInput() {
         CancelActiveInput();
     }
 
-    // Zivilisationen durchschalten (Tasten 1..4)
-    if (IsKeyPressed(KEY_ONE) && tribes_.size() > 0)   { activeTribeIndex_ = 0; camera_.SetTarget(tribes_[0]->CampPosition()); }
-    if (IsKeyPressed(KEY_TWO) && tribes_.size() > 1)   { activeTribeIndex_ = 1; camera_.SetTarget(tribes_[1]->CampPosition()); }
-    if (IsKeyPressed(KEY_THREE) && tribes_.size() > 2) { activeTribeIndex_ = 2; camera_.SetTarget(tribes_[2]->CampPosition()); }
-    if (IsKeyPressed(KEY_FOUR) && tribes_.size() > 3)  { activeTribeIndex_ = 3; camera_.SetTarget(tribes_[3]->CampPosition()); }
+    // Zivilisationen durchschalten (Tasten 1..9)
+    for (int k = 0; k < (int)tribes_.size() && k < 9; ++k) {
+        if (IsKeyPressed(KEY_ONE + k)) {
+            activeTribeIndex_ = k;
+            camera_.SetTarget(tribes_[k]->CampPosition());
+        }
+    }
 
     // Aktives Werkzeug (Spawnen / Malen) jederzeit abwählen mit Rechtsklick, 'Q', '0' oder Backspace
     if (IsKeyPressed(KEY_Q) || IsKeyPressed(KEY_ZERO) || IsKeyPressed(KEY_BACKSPACE)) {
@@ -408,6 +466,10 @@ void Simulation::HandleInput() {
     float tabX = 14.0f;
     float tabY = 110.0f;
     for (size_t i = 0; i < tribes_.size(); ++i) {
+        if (tabX + 130.0f > (float)GetScreenWidth() - 14.0f) {
+            tabX = 14.0f;
+            tabY += 30.0f;
+        }
         Rectangle tabR = { tabX, tabY, 130.0f, 26.0f };
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseScreen, tabR)) {
             activeTribeIndex_ = (int)i;
@@ -469,7 +531,9 @@ void Simulation::HandleInput() {
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         if (canInteractWithWorld) {
             bool clickedCaveman = false;
-            bool isPointSpawnTool = (currentAction_ == SelectedAction::SPAWN_HUNTER ||
+            bool isPointSpawnTool = (currentAction_ == SelectedAction::SPAWN_MAN ||
+                                     currentAction_ == SelectedAction::SPAWN_WOMAN ||
+                                     currentAction_ == SelectedAction::SPAWN_HUNTER ||
                                      currentAction_ == SelectedAction::SPAWN_ANIMAL ||
                                      currentAction_ == SelectedAction::GRAVITY_ANOMALY);
             if (!isPointSpawnTool) {
@@ -490,8 +554,12 @@ void Simulation::HandleInput() {
                         // Normaler Cursor: Klick ins Leere hebt die Figuren-Selektion auf
                         selectedCavemanId_ = -1;
                         break;
+                    case SelectedAction::SPAWN_MAN:
                     case SelectedAction::SPAWN_HUNTER:
-                        SpawnCaveman(Role::Hunter, mouseWorld);
+                        SpawnCaveman(Role::Hunter, mouseWorld, -1, BLANK, Gender::Male);
+                        break;
+                    case SelectedAction::SPAWN_WOMAN:
+                        SpawnCaveman(Role::Gatherer, mouseWorld, -1, BLANK, Gender::Female);
                         break;
                     case SelectedAction::SPAWN_ANIMAL:
                         SpawnAnimal(mouseWorld);
@@ -536,10 +604,10 @@ void Simulation::UpdateDemographicsAndFactions(float dt) {
     // 1. Soziale Visualisierung (Clan-Farbring, Rang-Krone, Heimatlager) für alle Figuren synchronisieren
     for (auto& c : cavemen_) {
         if (c.IsDead()) continue;
-        int tIdx = std::clamp(c.ClanId() - 1, 0, (int)tribes_.size() - 1);
-        Tribe& tr = *tribes_[tIdx];
-        SocialRank rank = tr.Hierarchy().GetRank(c.Id());
-        c.SyncSocialVisuals(tr.Id(), tr.FactionColor(), (int)rank, tr.CampPosition());
+        Tribe* tr = GetTribe(c.ClanId());
+        if (!tr) continue;
+        SocialRank rank = tr->Hierarchy().GetRank(c.Id());
+        c.SyncSocialVisuals(tr->Id(), tr->FactionColor(), (int)rank, tr->CampPosition());
     }
 
     // 2. Stufe 3: Demografie, Fortpflanzung & genetische Vererbung pro Stamm
@@ -588,6 +656,225 @@ void Simulation::UpdateDemographicsAndFactions(float dt) {
     }
 }
 
+void Simulation::CheckLeadershipChallenges(float dt) {
+    challengeTimer_ += dt;
+    if (challengeTimer_ < 12.0f) return;
+    challengeTimer_ = 0.0f;
+
+    for (auto& tr : tribes_) {
+        tr->Hierarchy().CheckLeadershipChallenge(*tr, cavemen_, eventLog_);
+    }
+}
+
+bool Simulation::FindSecessionSettlementSpot(Vector2& outPos) const {
+    struct Candidate {
+        int tx, ty;
+        float score;
+    };
+    std::vector<Candidate> candidates;
+
+    for (int y = 10; y < world_.Height() - 10; y += 2) {
+        for (int x = 10; x < world_.Width() - 10; x += 2) {
+            const TileData& td = world_.GetTileData(x, y);
+            if (td.ownerTribeId != -1) continue; // Nur neutrales Land!
+            if (td.waterType != WaterType::None || td.isCliff || td.heightLevel > 2) continue;
+            if (td.type != TILE_GRASS && td.type != TILE_FOREST) continue;
+
+            Vector2 pos = World::TileCenter(x, y);
+            // Mindestabstand zu existierenden Camps: mind. 35 Kacheln
+            bool tooClose = false;
+            for (const auto& tr : tribes_) {
+                float distTiles = Vector2Distance(pos, tr->CampPosition()) / (float)TILE_SIZE;
+                if (distTiles < 35.0f) {
+                    tooClose = true;
+                    break;
+                }
+            }
+            if (tooClose) continue;
+
+            // Qualität des Siedlungsortes bewerten (Süßwasser, Wald, Stein)
+            int woodTiles = 0, stoneTiles = 0, freshTiles = 0, flatTiles = 0;
+            for (int dy = -8; dy <= 8; ++dy) {
+                for (int dx = -8; dx <= 8; ++dx) {
+                    int nx = x + dx, ny = y + dy;
+                    if (!world_.IsInBounds(nx, ny)) continue;
+                    const TileData& ntd = world_.GetTileData(nx, ny);
+                    if (ntd.waterType == WaterType::Freshwater || ntd.isRiver) freshTiles++;
+                    if (ntd.type == TILE_FOREST) woodTiles++;
+                    if (ntd.type == TILE_MOUNTAIN) stoneTiles++;
+                    if (std::abs(dx) <= 3 && std::abs(dy) <= 3 && ntd.heightLevel <= 2 && !ntd.isCliff) flatTiles++;
+                }
+            }
+
+            if (flatTiles < 20) continue;
+            float score = (float)flatTiles * 1.5f + (float)freshTiles * 3.0f + (float)woodTiles * 1.2f + (float)stoneTiles * 1.8f;
+            candidates.push_back({ x, y, score });
+        }
+    }
+
+    if (candidates.empty()) return false;
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        return a.score > b.score;
+    });
+
+    int pickIdx = GetRandomValue(0, std::min(4, (int)candidates.size() - 1));
+    outPos = World::TileCenter(candidates[pickIdx].tx, candidates[pickIdx].ty);
+    return true;
+}
+
+void Simulation::CheckAndExecuteSecession(float dt) {
+    schismTimer_ += dt;
+    if (schismTimer_ < 16.0f) return;
+    schismTimer_ = 0.0f;
+
+    // Maximale Clan-Anzahl zur Stabilität begrenzen
+    if (tribes_.size() >= 8) return;
+
+    for (size_t tIdx = 0; tIdx < tribes_.size(); ++tIdx) {
+        Tribe& parentTribe = *tribes_[tIdx];
+
+        int memberCount = 0;
+        int chiefId = parentTribe.Hierarchy().GetChiefIdForClan(parentTribe.Id());
+        Caveman* rebel = nullptr;
+        float lowestLoyalty = 20.0f; // Schwellenwert < 20
+
+        for (auto& c : cavemen_) {
+            if (c.IsDead() || c.ClanId() != parentTribe.Id()) continue;
+            memberCount++;
+            if (c.GetRole() == Role::Child || c.Id() == chiefId) continue;
+
+            if (c.Loyalty() < lowestLoyalty) {
+                lowestLoyalty = c.Loyalty();
+                rebel = &c;
+            }
+        }
+
+        // Parent Clan muss mind. 12 Mitglieder haben, damit er nicht ausstirbt & Sezession realistisch ist
+        if (memberCount < 12 || !rebel) continue;
+
+        // Finde passenden Siedlungsplatz im unbesiedelten, neutralen Land
+        Vector2 targetCampPos;
+        if (!FindSecessionSettlementSpot(targetCampPos)) continue;
+
+        // Gefährten rekrutieren: Partner und enge Freunde
+        std::vector<Caveman*> followers;
+        int partnerId = parentTribe.Relationships().GetPartner(rebel->Id());
+
+        for (auto& c : cavemen_) {
+            if (c.IsDead() || c.ClanId() != parentTribe.Id() || c.Id() == rebel->Id() || c.Id() == chiefId) continue;
+            if (c.Id() == partnerId) {
+                followers.push_back(&c);
+            } else if (followers.size() < 2) {
+                float aff = parentTribe.Relationships().GetAffinity(c.Id(), rebel->Id());
+                float tru = parentTribe.Relationships().GetTrust(c.Id(), rebel->Id());
+                if (aff >= 40.0f || tru >= 55.0f || c.Loyalty() < 30.0f) {
+                    followers.push_back(&c);
+                }
+            }
+        }
+
+        int newClanId = 1;
+        for (const auto& tr : tribes_) {
+            if (tr->Id() >= newClanId) newClanId = tr->Id() + 1;
+        }
+
+        auto clanInfo = Tribe::GenerateProceduralClan(newClanId, targetCampPos, world_);
+        auto newTribe = std::make_unique<Tribe>(targetCampPos);
+        newTribe->SetIdentity(newClanId, clanInfo.name, clanInfo.color);
+        newTribe->SetFormed(true);
+        newTribe->InitWorld(world_);
+
+        // Startvorräte für die Pioniere
+        newTribe->Stock().food = 6;
+        newTribe->Stock().wood = 8;
+        newTribe->Stock().stone = 4;
+        newTribe->Stock().torches = 2;
+
+        // Start-Territorium beanspruchen (Basis 45-60 Kacheln)
+        world_.InitStartingTerritory(newClanId, targetCampPos, 48);
+
+        std::string oldClanName = parentTribe.Name();
+
+        // Abtrünniger wird Häuptling des neuen Stammes
+        rebel->SyncSocialVisuals(newClanId, clanInfo.color, (int)SocialRank::Chief, targetCampPos);
+        newTribe->Hierarchy().AssignToClan(rebel->Id(), (int)rebel->GetRole(), newClanId);
+        newTribe->Hierarchy().SetRank(rebel->Id(), SocialRank::Chief);
+        rebel->SetLoyalty(90.0f);
+        rebel->TriggerEmote(SocialEmote::Crown, 5.0f);
+        rebel->SetDestinationDirect(world_, targetCampPos, true);
+
+        // Gefolgschaft migriert mit
+        for (auto* f : followers) {
+            f->SyncSocialVisuals(newClanId, clanInfo.color, (int)SocialRank::Worker, targetCampPos);
+            newTribe->Hierarchy().AssignToClan(f->Id(), (int)f->GetRole(), newClanId);
+            f->SetLoyalty(80.0f);
+            f->TriggerEmote(SocialEmote::Chat, 4.0f);
+            f->SetDestinationDirect(world_, targetCampPos, true);
+        }
+
+        eventLog_.Add(TextFormat("[SCHISMA & NEUGRÜNDUNG] %s bricht mit dem %s und führt %d Gefährten ins Exil! Neuer Stamm gegründet: %s",
+                                 rebel->Name().c_str(), oldClanName.c_str(), (int)followers.size() + 1, clanInfo.name.c_str()),
+                      clanInfo.color);
+
+        tribes_.push_back(std::move(newTribe));
+        break; // Nur ein Schisma pro Zyklus
+    }
+}
+
+void Simulation::CheckTownCenterConquest() {
+    if (tribes_.size() <= 1) return;
+
+    for (size_t i = 0; i < tribes_.size(); ++i) {
+        Tribe& defTribe = *tribes_[i];
+        int campTx = World::ToTile(defTribe.CampPosition().x);
+        int campTy = World::ToTile(defTribe.CampPosition().y);
+        int campOwner = world_.GetOwnerTribeId(campTx, campTy);
+
+        if (campOwner >= 0 && campOwner != defTribe.Id()) {
+            Tribe* conqTribe = GetTribe(campOwner);
+            if (!conqTribe) continue;
+
+            std::string defName = defTribe.Name();
+            std::string conqName = conqTribe->Name();
+            Color conqColor = conqTribe->FactionColor();
+            int defId = defTribe.Id();
+            int conqId = conqTribe->Id();
+
+            // Territorium übertragen:
+            for (int y = 0; y < world_.Height(); ++y) {
+                for (int x = 0; x < world_.Width(); ++x) {
+                    if (world_.GetOwnerTribeId(x, y) == defId) {
+                        world_.SetOwnerTribeId(x, y, conqId);
+                        world_.SetClaimStrength(x, y, 35.0f);
+                    }
+                }
+            }
+
+            // Überlebende assimilieren:
+            int assimilated = 0;
+            for (auto& c : cavemen_) {
+                if (c.IsAlive() && c.ClanId() == defId) {
+                    c.SyncSocialVisuals(conqId, conqColor, (int)SocialRank::Worker, conqTribe->CampPosition());
+                    conqTribe->Hierarchy().AssignToClan(c.Id(), (int)c.GetRole(), conqId);
+                    c.SetLoyalty(50.0f);
+                    c.TriggerEmote(SocialEmote::Chat, 4.0f);
+                    c.SetDestinationDirect(world_, conqTribe->CampPosition(), true);
+                    assimilated++;
+                }
+            }
+
+            eventLog_.Add(TextFormat("[STAMMESUNTERGANG] Das Hauptlager des %s wurde von %s erobert! %d Überlebende wurden assimiliert.",
+                                     defName.c_str(), conqName.c_str(), assimilated), conqColor);
+
+            tribes_.erase(tribes_.begin() + i);
+            if (activeTribeIndex_ >= (int)tribes_.size()) {
+                activeTribeIndex_ = std::max(0, (int)tribes_.size() - 1);
+            }
+            break;
+        }
+    }
+}
+
 void Simulation::Update(float dt) {
     HandleInput();
     camera_.Update(dt);
@@ -608,6 +895,7 @@ void Simulation::Update(float dt) {
         // 1. Umwelt-Physik, Feuer, Strom, Wetter, Partikel & dynamische Wege updaten
         env_.Update(world_, resources_, CurrentUiTribe().Buildings(), cavemen_, eventLog_, timeOfDay, step);
         world_.UpdateRoads(step);
+        world_.UpdateTerritories(tribes_, cavemen_, step);
 
         // 2. Ressourcen updaten
         for (const auto& t : tribes_) {
@@ -618,17 +906,20 @@ void Simulation::Update(float dt) {
         int population = GetAliveCount();
         for (auto& t : tribes_) {
             t->Update(world_, cavemen_, population, step, eventLog_);
-            t->Hierarchy().UpdateLeadership(t->Relationships(), cavemen_, eventLog_);
+            t->Hierarchy().UpdateLeadership(t->Relationships(), cavemen_, eventLog_, t->FactionColor(), t->Name());
         }
 
-        // 4. Demografie (Nachwuchs & Vererbung), Fraktionsspaltung & Clan-Visuals
+        // 4. Demografie (Nachwuchs & Vererbung), Herausforderungs-Duelle, Schisma & Clan-Visuals
         UpdateDemographicsAndFactions(step);
+        CheckLeadershipChallenges(step);
+        CheckAndExecuteSecession(step);
+        CheckTownCenterConquest();
 
         // 5. Steinzeitmenschen mit Utility AI, Soziologie & Umwelt-Kontext updaten
         for (auto& c : cavemen_) {
-            int tIdx = std::clamp(c.ClanId() - 1, 0, (int)tribes_.size() - 1);
-            Tribe& tr = *tribes_[tIdx];
-            WorldContext ctx{ world_, tr, resources_, eventLog_, population, timeOfDay, &cavemen_, &env_ };
+            Tribe* tr = GetTribe(c.ClanId());
+            if (!tr) tr = tribes_[0].get();
+            WorldContext ctx{ world_, *tr, resources_, eventLog_, population, timeOfDay, &cavemen_, &tribes_, &env_ };
             c.Update(ctx, step);
         }
 
@@ -640,8 +931,9 @@ void Simulation::DrawRelationshipLines(const Caveman& selected) const {
     float fromYOffset = world_.GetVisualYOffset(selected.Position());
     Vector2 from = { selected.Position().x, selected.Position().y - 8.0f + fromYOffset };
     int selId = selected.Id();
-    int tIdx = std::clamp(selected.ClanId() - 1, 0, (int)tribes_.size() - 1);
-    const Tribe& tr = *tribes_[tIdx];
+    const Tribe* trPtr = GetTribe(selected.ClanId());
+    if (!trPtr) trPtr = tribes_[0].get();
+    const Tribe& tr = *trPtr;
 
     for (const auto& other : cavemen_) {
         if (other.IsDead() || other.Id() == selId) continue;
@@ -739,7 +1031,12 @@ void Simulation::DrawWorld() const {
         return yA < yB;
     });
 
+    const Vector2 viewTL = GetScreenToWorld2D({ 0.0f, 0.0f }, camera_.Get());
+    const Vector2 viewBR = GetScreenToWorld2D({ (float)SCREEN_WIDTH, (float)SCREEN_HEIGHT }, camera_.Get());
+    const Rectangle cullRect = { viewTL.x - 32.0f, viewTL.y - 48.0f, (viewBR.x - viewTL.x) + 64.0f, (viewBR.y - viewTL.y) + 96.0f };
+
     for (const auto* c : sortedCavemen) {
+        if (!CheckCollisionPointRec(c->Position(), cullRect)) continue;
         bool highlighted = (c->Id() == selectedCavemanId_);
         if (highlighted) {
             c->DrawDebugPath();
@@ -753,8 +1050,10 @@ void Simulation::DrawWorld() const {
     if (currentAction_ != SelectedAction::NONE &&
         mouseScreen.x >= 0 && mouseScreen.x <= SCREEN_WIDTH && mouseScreen.y > 48 && mouseScreen.y < SCREEN_HEIGHT - 36) {
         Vector2 mouseWorld = camera_.ScreenToWorld(mouseScreen);
-        if (currentAction_ == SelectedAction::SPAWN_HUNTER) {
-            DrawCircleLines((int)mouseWorld.x, (int)mouseWorld.y, 14.0f, PURPLE);
+        if (currentAction_ == SelectedAction::SPAWN_MAN || currentAction_ == SelectedAction::SPAWN_HUNTER) {
+            DrawCircleLines((int)mouseWorld.x, (int)mouseWorld.y, 14.0f, SKYBLUE);
+        } else if (currentAction_ == SelectedAction::SPAWN_WOMAN) {
+            DrawCircleLines((int)mouseWorld.x, (int)mouseWorld.y, 14.0f, PINK);
         } else if (currentAction_ == SelectedAction::SPAWN_ANIMAL) {
             DrawCircleLines((int)mouseWorld.x, (int)mouseWorld.y, 14.0f, ORANGE);
         } else if (currentAction_ == SelectedAction::IGNITE_FIRE) {
@@ -791,11 +1090,15 @@ void Simulation::DrawUI() const {
         : "Siedlungsplan: Vollständig ausgebaut / Autonom aktiv";
     FontManager::DrawTextShadow(planText, 22.0f, 81.0f, 14.0f, RAYWHITE);
 
-    // 4 Zivilisations-Badges zum schnellen Durchschalten der Stämme
+    // Zivilisations-Badges zum schnellen Durchschalten der Stämme
     float tabX = 14.0f;
     float tabY = 110.0f;
     Vector2 mouseScreen = GetMousePosition();
     for (size_t i = 0; i < tribes_.size(); ++i) {
+        if (tabX + 130.0f > (float)screenW - 14.0f) {
+            tabX = 14.0f;
+            tabY += 30.0f;
+        }
         bool isActive = ((int)i == activeTribeIndex_);
         Rectangle tabR = { tabX, tabY, 130.0f, 26.0f };
         bool hov = CheckCollisionPointRec(mouseScreen, tabR);
@@ -814,44 +1117,53 @@ void Simulation::DrawUI() const {
 
     FontManager::DrawTextShadow("PRIMITIVE SANDBOX", 16.0f, 12.0f, 22.0f, RAYWHITE);
 
-    // Zeitalter & Kausales 14-Epochen-Modell der aktiven Zivilisation
+    // Zeitalter & Kausales 14-Epochen-Modell der aktiven Zivilisation mit Statusanzeige
     Era era = uiTribe.Age().CurrentEra();
     HistoricalEpoch curEpoch = uiTribe.Age().CurrentEpoch();
-    FontManager::DrawTextShadow(TextFormat("[%s | %s]  (M:%d/%d)", EraName(era), HistoricalEpochName(curEpoch),
-                                           uiTribe.Skills().GetMilestonesCompleted(era), uiTribe.Skills().GetMilestonesTotal(era)),
-                                235.0f, 14.0f, 16.0f, EraColor(era));
 
-    // Tag / Nacht + Wetter Indikator
     float timeOfDay = std::fmod(totalSimTime_, cfg::kDayCycleDuration) / cfg::kDayCycleDuration;
     bool isNight = (timeOfDay > 0.72f || timeOfDay < 0.22f);
-    FontManager::DrawTextShadow(isNight ? "NACHT" : "TAG", 590.0f, 14.0f, 16.0f, isNight ? SKYBLUE : GOLD);
-    FontManager::DrawTextShadow(WeatherTypeName(env_.GetWeather()), 650.0f, 14.0f, 16.0f, WeatherTypeColor(env_.GetWeather()));
+    std::string speedStr = isPaused_ ? "PAUSE" : TextFormat("%.0fx", timeSpeed_);
 
-    // Pause & Speed
-    if (isPaused_) {
-        FontManager::DrawTextShadow("[PAUSE]", 715.0f, 14.0f, 16.0f, RED);
-    } else {
-        FontManager::DrawTextShadow(TextFormat("[%.0fx]", timeSpeed_), 715.0f, 14.0f, 16.0f, GREEN);
-    }
+    std::string epochSummary = TextFormat("%s | %s | %s [%s]",
+                                          HistoricalEpochName(curEpoch),
+                                          isNight ? "NACHT" : "TAG",
+                                          WeatherTypeName(env_.GetWeather()),
+                                          speedStr.c_str());
+
+    FontManager::DrawTextShadow(epochSummary.c_str(), 235.0f, 15.0f, 15.0f, EraColor(era));
 
     // Lager-Vorräte (Rohstoffe & Veredelt) der aktiven Zivilisation
     const auto& stock = uiTribe.Stock();
     int pop = GetAliveCount();
     int sleepCap = uiTribe.SleepingCapacity();
 
-    FontManager::DrawTextShadow(TextFormat("Pop: %d", pop), 765.0f, 14.0f, 16.0f, RAYWHITE);
-    FontManager::DrawTextShadow(TextFormat("Nahrung: %d (+%d)", stock.food, stock.cookedFood), 835.0f, 14.0f, 16.0f,
+    float stockX = 245.0f + FontManager::MeasureText(epochSummary.c_str(), 15.0f) + 20.0f;
+
+    FontManager::DrawTextShadow(TextFormat("Pop: %d", pop), stockX, 15.0f, 15.0f, RAYWHITE);
+    stockX += 72.0f;
+
+    // Phase 5: Invertiertes Betten-Verhältnis (Betten/Pop, rot wenn Betten fehlen)
+    Color bedCol = (pop > sleepCap) ? RED : ((sleepCap == pop) ? GOLD : LIME);
+    FontManager::DrawTextShadow(TextFormat("Betten: %d/%d", sleepCap, pop), stockX, 15.0f, 15.0f, bedCol);
+    stockX += 105.0f;
+
+    FontManager::DrawTextShadow(TextFormat("Nahrung: %d (+%d)", stock.food, stock.cookedFood), stockX, 15.0f, 15.0f,
                                 (stock.food + stock.cookedFood > 5) ? LIME : RED);
-    FontManager::DrawTextShadow(TextFormat("Holz: %d", stock.wood), 980.0f, 14.0f, 16.0f, Color{ 215, 155, 80, 255 });
-    FontManager::DrawTextShadow(TextFormat("Stein: %d", stock.stone), 1060.0f, 14.0f, 16.0f, Color{ 200, 200, 200, 255 });
-    FontManager::DrawTextShadow(TextFormat("Fell: %d", stock.hides), 1145.0f, 14.0f, 16.0f, Color{ 225, 180, 125, 255 });
+    stockX += 135.0f;
+
+    FontManager::DrawTextShadow(TextFormat("Holz: %d", stock.wood), stockX, 15.0f, 15.0f, Color{ 215, 155, 80, 255 });
+    stockX += 75.0f;
+    FontManager::DrawTextShadow(TextFormat("Stein: %d", stock.stone), stockX, 15.0f, 15.0f, Color{ 200, 200, 200, 255 });
+    stockX += 75.0f;
+    FontManager::DrawTextShadow(TextFormat("Fell: %d", stock.hides), stockX, 15.0f, 15.0f, Color{ 225, 180, 125, 255 });
+    stockX += 70.0f;
 
     if (stock.planks > 0 || stock.bricks > 0 || era >= Era::BronzeAge) {
-        FontManager::DrawTextShadow(TextFormat("Balken: %d", stock.planks), 1215.0f, 14.0f, 16.0f, Color{ 240, 185, 105, 255 });
-        FontManager::DrawTextShadow(TextFormat("Ziegel: %d", stock.bricks), 1305.0f, 14.0f, 16.0f, Color{ 215, 215, 225, 255 });
+        FontManager::DrawTextShadow(TextFormat("Balken: %d", stock.planks), stockX, 15.0f, 15.0f, Color{ 240, 185, 105, 255 });
+        stockX += 85.0f;
+        FontManager::DrawTextShadow(TextFormat("Ziegel: %d", stock.bricks), stockX, 15.0f, 15.0f, Color{ 215, 215, 225, 255 });
     }
-
-    FontManager::DrawTextShadow(TextFormat("Betten: %d/%d", pop, sleepCap), 1385.0f, 14.0f, 16.0f, (sleepCap >= pop) ? GOLD : ORANGE);
 
     // Territorien-Button & Skilltree-Button
     Rectangle btnTerritory = { (float)screenW - 370.0f, 9.0f, 130.0f, 32.0f };
@@ -868,6 +1180,26 @@ void Simulation::DrawUI() const {
 
     DrawFPS(screenW - 75, 15);
 
+    // Statusleiste für Territorien bei aktivem Overlay (Phase 4)
+    if (showTerritoryOverlay_) {
+        int currentTiles = uiTribe.CurrentTerritoryCount();
+        int maxCapacity = uiTribe.MaxTerritoryCapacity();
+        int anchorCount = 0;
+        for (const auto& b : uiTribe.Buildings().All()) {
+            if (b.IsTerritoryAnchor()) anchorCount++;
+        }
+        std::string focusText = uiTribe.GetExpansionTarget().active ? uiTribe.GetExpansionTarget().reason : "Kernland";
+        std::string territoryInfo = TextFormat("Territorium: %d / %d Kacheln  |  Anker: %d  |  Fokus: %s",
+                                               currentTiles, maxCapacity, anchorCount, focusText.c_str());
+
+        int textW = MeasureText(territoryInfo.c_str(), 14);
+        int barW = textW + 36;
+        int barX = (screenW - barW) / 2;
+        DrawRectangle(barX, 54, barW, 26, Fade(BLACK, 0.88f));
+        DrawRectangleLines(barX, 54, barW, 26, uiTribe.FactionColor());
+        FontManager::DrawTextCenteredShadow(territoryInfo.c_str(), barX + barW * 0.5f, 58.0f, 14.0f, uiTribe.FactionColor());
+    }
+
     // -------------------------------------------------------------------------
     // 2. Inspektor-Panel für selektierten Steinzeitmenschen (rechts)
     // -------------------------------------------------------------------------
@@ -881,81 +1213,109 @@ void Simulation::DrawUI() const {
 
     if (selected) {
         int panelW = 340;
-        int panelH = 525;
+        int panelH = 550;
         int panelX = screenW - panelW - 16;
         int panelY = 60;
 
         DrawRectangle(panelX, panelY, panelW, panelH, Fade(BLACK, 0.92f));
         DrawRectangleLines(panelX, panelY, panelW, panelH, RoleColor(selected->GetRole()));
 
-        // Name, Rolle & Lebensalter (Stufe 3)
-        FontManager::DrawTextShadow(selected->Name().c_str(), panelX + 14.0f, panelY + 12.0f, 22.0f, RAYWHITE);
-        FontManager::DrawTextShadow(TextFormat("%s  |  Alter: %.0f / %.0f J.",
-                                               RoleName(selected->GetRole()), selected->AgeYears(), selected->MaxLifespan()),
+        // Name, Geschlecht, Rolle & Lebensalter
+        FontManager::DrawTextShadow(TextFormat("%s  %s", selected->Name().c_str(), selected->GenderSymbol()),
+                                    panelX + 14.0f, panelY + 12.0f, 22.0f, RAYWHITE);
+        FontManager::DrawTextShadow(TextFormat("%s (%s)  |  Alter: %.0f / %.0f J.",
+                                               RoleName(selected->GetRole()), selected->GenderName(),
+                                               selected->AgeYears(), selected->MaxLifespan()),
                                     panelX + 14.0f, panelY + 38.0f, 15.0f, RoleColor(selected->GetRole()));
 
-        // Clan, Kohäsion & Rang
-        int tIdx = std::clamp(selected->ClanId() - 1, 0, (int)tribes_.size() - 1);
-        const Tribe& tr = *tribes_[tIdx];
-        int clanId = tr.Hierarchy().GetClanId(selected->Id());
-        const Clan* clan = tr.Hierarchy().GetClan(clanId);
-        SocialRank rank = tr.Hierarchy().GetRank(selected->Id());
-        FontManager::DrawTextShadow(TextFormat("%s (%s) | %s",
-                                               tr.Name().c_str(),
-                                               clan ? clan->name.c_str() : "Clan",
-                                               SocialRankName(rank)),
-                                    panelX + 14.0f, panelY + 58.0f, 14.0f, tr.FactionColor());
+        // Clan & Rang
+        const Tribe* trPtr = GetTribe(selected->ClanId());
+        if (trPtr) {
+            SocialRank rank = trPtr->Hierarchy().GetRank(selected->Id());
+            FontManager::DrawTextShadow(TextFormat("%s  |  %s",
+                                                   trPtr->Name().c_str(),
+                                                   SocialRankName(rank)),
+                                        panelX + 14.0f, panelY + 58.0f, 14.0f, trPtr->FactionColor());
+
+            int clanAnchors = 0;
+            for (const auto& b : trPtr->Buildings().All()) {
+                if (b.IsTerritoryAnchor()) clanAnchors++;
+            }
+            FontManager::DrawTextShadow(TextFormat("Territorium: %d / %d Kacheln (Anker: %d)",
+                                                   trPtr->CurrentTerritoryCount(), trPtr->MaxTerritoryCapacity(), clanAnchors),
+                                        panelX + 14.0f, panelY + 76.0f, 13.0f, trPtr->FactionColor());
+        } else {
+            FontManager::DrawTextShadow("Freier Wanderer (Kein Clan)",
+                                        panelX + 14.0f, panelY + 58.0f, 14.0f, LIGHTGRAY);
+            FontManager::DrawTextShadow("Territorium: Keine Stammesbindung",
+                                        panelX + 14.0f, panelY + 76.0f, 13.0f, DARKGRAY);
+        }
 
         // Persönlichkeits-Kurzprofil
         const Personality& p = selected->GetPersonality();
         FontManager::DrawTextShadow(TextFormat("Wesen: %s (Dom: %+.1f, Alt: %+.1f, Soz: %+.1f)",
                                                p.GetPrimaryTraitDescription().c_str(), p.dominance, p.altruism, p.sociability),
-                                    panelX + 14.0f, panelY + 78.0f, 13.0f, LIGHTGRAY);
+                                           panelX + 14.0f, panelY + 94.0f, 13.0f, LIGHTGRAY);
 
-        // Beziehungen
-        int partnerId = tr.Relationships().GetPartner(selected->Id());
-        auto friends = tr.Relationships().GetFriends(selected->Id());
-        auto enemies = tr.Relationships().GetEnemies(selected->Id());
+        // Beziehungen & Partner
+        int partnerId = trPtr ? trPtr->Relationships().GetPartner(selected->Id()) : -1;
+        const Caveman* partnerPtr = nullptr;
+        if (partnerId >= 0) {
+            for (const auto& c : cavemen_) {
+                if (c.Id() == partnerId && !c.IsDead()) {
+                    partnerPtr = &c;
+                    break;
+                }
+            }
+        }
+        std::string partnerStr = "Keiner";
+        if (partnerPtr) {
+            partnerStr = TextFormat("%s %s", partnerPtr->Name().c_str(), partnerPtr->GenderSymbol());
+        } else if (partnerId >= 0) {
+            partnerStr = TextFormat("#%d", partnerId);
+        }
+        auto friends = trPtr ? trPtr->Relationships().GetFriends(selected->Id()) : std::vector<int>{};
+        auto enemies = trPtr ? trPtr->Relationships().GetEnemies(selected->Id()) : std::vector<int>{};
         FontManager::DrawTextShadow(TextFormat("Partner: %s | Freunde: %d | Rivalen: %d",
-                                               (partnerId >= 0 ? TextFormat("#%d", partnerId) : "Keiner"),
+                                               partnerStr.c_str(),
                                                (int)friends.size(), (int)enemies.size()),
-                                    panelX + 14.0f, panelY + 96.0f, 14.0f, (partnerId >= 0 ? PINK : RAYWHITE));
+                                    panelX + 14.0f, panelY + 112.0f, 14.0f, (partnerId >= 0 ? PINK : RAYWHITE));
 
         // Status & Tätigkeit
-        FontManager::DrawTextShadow(TextFormat("Status: %s", StateName(selected->State())), panelX + 14.0f, panelY + 118.0f, 15.0f, YELLOW);
-        FontManager::DrawTextShadow(TextFormat("Tätigkeit: %s", selected->ActivityText().c_str()), panelX + 14.0f, panelY + 136.0f, 14.0f, LIGHTGRAY);
+        FontManager::DrawTextShadow(TextFormat("Status: %s", StateName(selected->State())), panelX + 14.0f, panelY + 132.0f, 15.0f, YELLOW);
+        FontManager::DrawTextShadow(TextFormat("Tätigkeit: %s", selected->ActivityText().c_str()), panelX + 14.0f, panelY + 150.0f, 14.0f, LIGHTGRAY);
 
         auto drawStatBar = [&](const char* label, float val, float maxVal, int y, Color barColor) {
             FontManager::DrawTextShadow(TextFormat("%s: %.0f/%.0f", label, val, maxVal), panelX + 14.0f, (float)y, 13.0f, RAYWHITE);
             int barX = panelX + 130;
             int barW = 185;
-            int barH = 12;
+            int barH = 11;
             DrawRectangle(barX, y + 2, barW, barH, Fade(GRAY, 0.4f));
             float pct = std::clamp(val / maxVal, 0.0f, 1.0f);
             DrawRectangle(barX, y + 2, (int)(barW * pct), barH, barColor);
             DrawRectangleLines(barX, y + 2, barW, barH, Fade(WHITE, 0.5f));
         };
 
-        drawStatBar("HP", selected->Hp(), 100.0f, panelY + 158, (selected->Hp() > 50) ? GREEN : RED);
-        drawStatBar("AP", selected->Ap(), 100.0f, panelY + 176, SKYBLUE);
-        drawStatBar("Hunger", selected->Hunger(), 100.0f, panelY + 194, (selected->Hunger() > 70) ? RED : ORANGE);
-        drawStatBar("Wärme", selected->Warmth(), 100.0f, panelY + 212, (selected->Warmth() < 30) ? RED : (selected->Warmth() < 60) ? YELLOW : ORANGE);
-        drawStatBar("Müdigkeit", selected->Tiredness(), 100.0f, panelY + 230, (selected->Tiredness() > 80) ? PURPLE : BLUE);
-        drawStatBar("Motivation", selected->Morale(), 100.0f, panelY + 248, (selected->Morale() > 60) ? LIME : GOLD);
-        drawStatBar("Gemeinschaft", 100.0f - selected->SocialNeed(), 100.0f, panelY + 266, (selected->SocialNeed() > 70) ? ORANGE : GREEN);
+        drawStatBar("HP", selected->Hp(), 100.0f, panelY + 172, (selected->Hp() > 50) ? GREEN : RED);
+        drawStatBar("AP", selected->Ap(), 100.0f, panelY + 189, SKYBLUE);
+        drawStatBar("Hunger", selected->Hunger(), 100.0f, panelY + 206, (selected->Hunger() > 70) ? RED : ORANGE);
+        drawStatBar("Wärme", selected->Warmth(), 100.0f, panelY + 223, (selected->Warmth() < 30) ? RED : (selected->Warmth() < 60) ? YELLOW : ORANGE);
+        drawStatBar("Müdigkeit", selected->Tiredness(), 100.0f, panelY + 240, (selected->Tiredness() > 80) ? PURPLE : BLUE);
+        drawStatBar("Motivation", selected->Morale(), 100.0f, panelY + 257, (selected->Morale() > 60) ? LIME : GOLD);
+        drawStatBar("Gemeinschaft", 100.0f - selected->SocialNeed(), 100.0f, panelY + 274, (selected->SocialNeed() > 70) ? ORANGE : GREEN);
 
         // Kleidung & Ausrüstung (Meilenstein A)
         FontManager::DrawTextShadow(TextFormat("Kleidung: %s", ClothingTierName(selected->GetClothing())),
-                                    panelX + 14.0f, panelY + 288.0f, 13.0f, Color{ 225, 190, 135, 255 });
+                                    panelX + 14.0f, panelY + 295.0f, 13.0f, Color{ 225, 190, 135, 255 });
         if (selected->GetToolTier() != ToolTier::BareHands) {
             FontManager::DrawTextShadow(TextFormat("Werkzeug: %s (%.0f%%) | Waffe: %s",
                                                    ToolTierName(selected->GetToolTier()), selected->ToolDurability(),
                                                    WeaponTierName(selected->GetWeaponTier())),
-                                        panelX + 14.0f, panelY + 306.0f, 13.0f, Color{ 190, 225, 255, 255 });
+                                        panelX + 14.0f, panelY + 313.0f, 13.0f, Color{ 190, 225, 255, 255 });
         } else {
             FontManager::DrawTextShadow(TextFormat("Werkzeug: %s | Waffe: %s",
                                                    ToolTierName(selected->GetToolTier()), WeaponTierName(selected->GetWeaponTier())),
-                                        panelX + 14.0f, panelY + 306.0f, 13.0f, LIGHTGRAY);
+                                        panelX + 14.0f, panelY + 313.0f, 13.0f, LIGHTGRAY);
         }
 
         if (selected->Carrying() != CarryType::None) {
@@ -964,18 +1324,18 @@ void Simulation::DrawUI() const {
                                     (selected->Carrying() == CarryType::Stone) ? "Stein" :
                                     (selected->Carrying() == CarryType::Planks) ? "Balken" : "Ziegel";
             FontManager::DrawTextShadow(TextFormat("Trägt: %d x %s (%s)", selected->CarryAmount(), carryName, ContainerTierName(selected->GetContainer())),
-                                        panelX + 14.0f, panelY + 324.0f, 14.0f, GREEN);
+                                        panelX + 14.0f, panelY + 331.0f, 14.0f, GREEN);
         } else {
             FontManager::DrawTextShadow(TextFormat("Tragehilfe: %s", ContainerTierName(selected->GetContainer())),
-                                        panelX + 14.0f, panelY + 324.0f, 13.0f, DARKGRAY);
+                                        panelX + 14.0f, panelY + 331.0f, 13.0f, DARKGRAY);
         }
 
         // --- Utility AI Log & Entscheidungsgrund ---
-        DrawLine(panelX + 10, panelY + 346, panelX + panelW - 10, panelY + 346, Fade(GRAY, 0.5f));
-        FontManager::DrawTextShadow("KI-Entscheidung (Utility AI):", panelX + 14.0f, panelY + 354.0f, 14.0f, GOLD);
-        FontManager::DrawTextShadow(selected->DecisionReason().c_str(), panelX + 14.0f, panelY + 374.0f, 13.0f, RAYWHITE);
+        DrawLine(panelX + 10, panelY + 352, panelX + panelW - 10, panelY + 352, Fade(GRAY, 0.5f));
+        FontManager::DrawTextShadow("KI-Entscheidung (Utility AI):", panelX + 14.0f, panelY + 359.0f, 14.0f, GOLD);
+        FontManager::DrawTextShadow(TextFormat("-> Grund: %s", selected->DecisionReason().c_str()), panelX + 14.0f, panelY + 378.0f, 13.0f, RAYWHITE);
         FontManager::DrawTextShadow(TextFormat("Nutzen-Score: %.2f  |  Wissen: +%.0f%%", selected->DecisionScore(), selected->KnowledgeBonus() * 100.0f),
-                                    panelX + 14.0f, panelY + 396.0f, 13.0f, SKYBLUE);
+                                    panelX + 14.0f, panelY + 398.0f, 13.0f, SKYBLUE);
 
         // Letzte prägende Erinnerung
         const auto& memories = selected->Memory().Entries();
@@ -994,10 +1354,22 @@ void Simulation::DrawUI() const {
     // 3. Ereignis-Log (unten links)
     // -------------------------------------------------------------------------
     const auto& logEntries = eventLog_.Entries();
-    int logY = screenH - 58 - (int)logEntries.size() * 22;
-    for (const auto& entry : logEntries) {
-        FontManager::DrawTextShadow(entry.text.c_str(), 16.0f, (float)logY, 16.0f, Fade(entry.color, 0.95f));
-        logY += 22;
+    if (!logEntries.empty()) {
+        float maxTextW = 220.0f;
+        for (const auto& entry : logEntries) {
+            float tw = FontManager::MeasureText(entry.text.c_str(), 14.0f);
+            if (tw > maxTextW) maxTextW = tw;
+        }
+        int totalH = (int)logEntries.size() * 22 + 8;
+        int boxY = screenH - 58 - (int)logEntries.size() * 22 - 4;
+        DrawRectangleRounded({ 12.0f, (float)boxY, maxTextW + 24.0f, (float)totalH }, 0.15f, 4, Fade(BLACK, 0.78f));
+        DrawRectangleRoundedLines({ 12.0f, (float)boxY, maxTextW + 24.0f, (float)totalH }, 0.15f, 4, Fade(GRAY, 0.40f));
+
+        int logY = boxY + 6;
+        for (const auto& entry : logEntries) {
+            FontManager::DrawTextShadow(entry.text.c_str(), 18.0f, (float)logY, 14.0f, Fade(entry.color, 0.95f));
+            logY += 22;
+        }
     }
 
     // -------------------------------------------------------------------------

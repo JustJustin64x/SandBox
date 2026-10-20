@@ -2,6 +2,7 @@
 
 #include "core/common.h"
 
+#include <functional>
 #include <vector>
 
 class World;
@@ -53,7 +54,8 @@ public:
     void Draw(const Camera2D& camera, const World* world = nullptr) const;
 
     // Bestes (nahes, wenig umkämpftes) verfügbares Objekt eines Typs; -1 wenn keins.
-    int FindBest(ResourceType type, Vector2 from) const;
+    int FindBest(ResourceType type, Vector2 from, const World* world = nullptr, int actorTribeId = -1,
+                 bool allowNeutralGrenz = false, const std::function<bool(int)>& isBlacklisted = nullptr) const;
 
     ResourceNode* Get(int index);
     const ResourceNode* Get(int index) const;

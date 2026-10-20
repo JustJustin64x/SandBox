@@ -1,6 +1,7 @@
 #include "social_structure.h"
 #include "relationship.h"
 #include "caveman.h"
+#include "tribe.h"
 #include "event_log.h"
 
 #include <algorithm>
@@ -17,46 +18,48 @@ const char* SocialRankName(SocialRank rank) {
 }
 
 SocialHierarchy::SocialHierarchy() {
-    InitDefaultClans();
+    InitClan(1, "Ur-Sippe", Color{ 215, 50, 50, 255 });
 }
 
-void SocialHierarchy::InitDefaultClans() {
-    clans_.clear();
+void SocialHierarchy::InitClan(int clanId, const std::string& name, Color color) {
+    for (auto& c : clans_) {
+        if (c.id == clanId) {
+            c.name = name;
+            c.bannerColor = color;
+            return;
+        }
+    }
+    Clan newClan;
+    newClan.id = clanId;
+    newClan.name = name;
+    newClan.bannerColor = color;
+    clans_.push_back(newClan);
+}
 
-    Clan clan1;
-    clan1.id = 1;
-    clan1.name = "Clan des Bären";
-    clan1.bannerColor = Color{ 190, 80, 50, 255 };
-    clans_.push_back(clan1);
-
-    Clan clan2;
-    clan2.id = 2;
-    clan2.name = "Clan des Wolfs";
-    clan2.bannerColor = Color{ 90, 150, 210, 255 };
-    clans_.push_back(clan2);
-
-    Clan clan3;
-    clan3.id = 3;
-    clan3.name = "Clan des Raben";
-    clan3.bannerColor = Color{ 140, 90, 190, 255 };
-    clans_.push_back(clan3);
+void SocialHierarchy::EnsureClanExists(int clanId, const std::string& defaultName, Color defaultColor) {
+    for (const auto& c : clans_) {
+        if (c.id == clanId) return;
+    }
+    Clan newClan;
+    newClan.id = clanId;
+    newClan.name = defaultName;
+    newClan.bannerColor = defaultColor;
+    clans_.push_back(newClan);
 }
 
 void SocialHierarchy::AssignToClan(int characterId, int roleIndex, int preferredClanId) {
-    if (clans_.empty()) return;
-    int clanIdx = (characterId % (int)clans_.size());
-    if (preferredClanId >= 0) {
-        for (size_t i = 0; i < clans_.size(); ++i) {
-            if (clans_[i].id == preferredClanId) {
-                clanIdx = (int)i;
-                break;
-            }
-        }
+    if (preferredClanId > 0) {
+        EnsureClanExists(preferredClanId, TextFormat("Clan #%d", preferredClanId));
+    } else if (clans_.empty()) {
+        EnsureClanExists(1, "Ur-Sippe");
     }
 
-    Clan& clan = clans_[clanIdx];
-    clan.memberIds.push_back(characterId);
-    memberToClan_[characterId] = clan.id;
+    int targetClanId = preferredClanId > 0 ? preferredClanId : clans_[0].id;
+    Clan* targetClan = GetClanMutable(targetClanId);
+    if (!targetClan) targetClan = &clans_[0];
+
+    targetClan->memberIds.push_back(characterId);
+    memberToClan_[characterId] = targetClan->id;
 
     // Ränge zuweisen
     SocialRank initialRank = SocialRank::Worker;
@@ -71,7 +74,7 @@ void SocialHierarchy::AssignToClan(int characterId, int roleIndex, int preferred
     if (kingdom_.monarchId < 0 && (roleIndex == 2 || roleIndex == 0)) {
         kingdom_.monarchId = characterId;
         ranks_[characterId] = SocialRank::Chief;
-        clan.chiefId = characterId;
+        targetClan->chiefId = characterId;
     }
 }
 
@@ -92,6 +95,22 @@ int SocialHierarchy::GetClanId(int characterId) const {
     auto it = memberToClan_.find(characterId);
     if (it != memberToClan_.end()) return it->second;
     return 1;
+}
+
+int SocialHierarchy::GetChiefIdForClan(int clanId) const {
+    const Clan* cl = GetClan(clanId);
+    if (cl && cl->chiefId >= 0) {
+        auto it = ranks_.find(cl->chiefId);
+        if (it != ranks_.end() && it->second == SocialRank::Chief) {
+            return cl->chiefId;
+        }
+    }
+    for (const auto& pair : ranks_) {
+        if (pair.second == SocialRank::Chief && GetClanId(pair.first) == clanId) {
+            return pair.first;
+        }
+    }
+    return kingdom_.monarchId;
 }
 
 const Clan* SocialHierarchy::GetClan(int clanId) const {
@@ -157,14 +176,154 @@ bool SocialHierarchy::AreKin(int idA, int idB) const {
     return false;
 }
 
-void SocialHierarchy::UpdateLeadership(const RelationshipManager& rels, const std::vector<Caveman>& cavemen, EventLog& log) {
+void SocialHierarchy::ElectLeader(std::vector<Caveman>& cavemen, const RelationshipManager& rels, EventLog& log, Color clanColor, const std::string& clanName) {
+    std::vector<int> candidateIndices;
+    float avgDominance = 0.0f;
+    float avgSociability = 0.0f;
+    int elderCount = 0;
+
+    for (size_t i = 0; i < cavemen.size(); ++i) {
+        if (cavemen[i].IsDead() || cavemen[i].GetRole() == Role::Child) continue;
+        candidateIndices.push_back((int)i);
+        avgDominance += cavemen[i].GetPersonality().dominance;
+        avgSociability += cavemen[i].GetPersonality().sociability + cavemen[i].GetPersonality().altruism;
+        if (cavemen[i].GetRole() == Role::Elder) elderCount++;
+    }
+
+    if (candidateIndices.empty()) return;
+
+    if (candidateIndices.size() == 1) {
+        Caveman& only = cavemen[candidateIndices[0]];
+        SetRank(only.Id(), SocialRank::Chief);
+        only.TriggerEmote(SocialEmote::Crown, 4.5f);
+        log.Add(TextFormat("%s übernimmt als einziger Erwachsener die Führung im %s!",
+                           only.Name().c_str(), clanName.c_str()), clanColor);
+        return;
+    }
+
+    avgDominance /= (float)candidateIndices.size();
+    avgSociability /= (float)candidateIndices.size();
+
+    // 2. Modus der Führungsfindung bestimmen:
+    // Pfad A: Schaukampf / Ritual-Duell (Dominanz / Aggression überwiegt)
+    // Pfad B: Ältestenrat (Tradition & Erfahrung überwiegt)
+    // Pfad C: Freie Stammeswahl (Kooperation & Geselligkeit überwiegt)
+
+    if (avgDominance > 0.08f) {
+        // --- PFAD A: RITUAL-ZWEIKAMPF / SCHAUKAMPF ---
+        std::sort(candidateIndices.begin(), candidateIndices.end(), [&](int a, int b) {
+            float scoreA = cavemen[a].GetPersonality().dominance * 1.5f + cavemen[a].Hp() * 0.2f + (cavemen[a].GetRole() == Role::Hunter ? 15.0f : 0.0f);
+            float scoreB = cavemen[b].GetPersonality().dominance * 1.5f + cavemen[b].Hp() * 0.2f + (cavemen[b].GetRole() == Role::Hunter ? 15.0f : 0.0f);
+            return scoreA > scoreB;
+        });
+
+        int cAIdx = candidateIndices[0];
+        int cBIdx = candidateIndices[1];
+        Caveman& champA = cavemen[cAIdx];
+        Caveman& champB = cavemen[cBIdx];
+
+        champA.TriggerEmote(SocialEmote::Dispute, 3.8f);
+        champB.TriggerEmote(SocialEmote::Dispute, 3.8f);
+
+        float combatScoreA = champA.Hp() * 0.4f + champA.Ap() * 0.3f + champA.GetPersonality().dominance * 20.0f;
+        float combatScoreB = champB.Hp() * 0.4f + champB.Ap() * 0.3f + champB.GetPersonality().dominance * 20.0f;
+
+        Caveman* winner = &champA;
+        Caveman* loser = &champB;
+        if (combatScoreB > combatScoreA) {
+            winner = &champB;
+            loser = &champA;
+        }
+
+        loser->TakeDamageNonLethal((float)GetRandomValue(6, 14));
+        SetRank(loser->Id(), SocialRank::Specialist);
+        SetRank(winner->Id(), SocialRank::Chief);
+        winner->TriggerEmote(SocialEmote::Crown, 5.0f);
+
+        log.Add(TextFormat("Ritual-Zweikampf im %s: %s bezwingt %s im Schaukampf und erringt die Häuptlingskrone!",
+                           clanName.c_str(), winner->Name().c_str(), loser->Name().c_str()), clanColor);
+
+    } else if (elderCount >= 1 && (elderCount >= 2 || avgSociability <= avgDominance + 0.3f)) {
+        // --- PFAD B: ÄLTESTENRAT ---
+        int bestElderIdx = -1;
+        float bestWisdom = -10.0f;
+        for (int idx : candidateIndices) {
+            float wisdom = cavemen[idx].AgeYears() * 1.2f + (cavemen[idx].GetRole() == Role::Elder ? 30.0f : 0.0f);
+            if (wisdom > bestWisdom) {
+                bestWisdom = wisdom;
+                bestElderIdx = idx;
+            }
+        }
+
+        for (int idx : candidateIndices) {
+            if (cavemen[idx].GetRole() == Role::Elder) {
+                cavemen[idx].TriggerEmote(SocialEmote::Idea, 3.5f);
+            }
+        }
+
+        Caveman& elderChief = cavemen[bestElderIdx];
+        SetRank(elderChief.Id(), SocialRank::Chief);
+        elderChief.TriggerEmote(SocialEmote::Crown, 5.0f);
+
+        log.Add(TextFormat("Der Ältestenrat des %s bestimmt: Der ehrwürdige %s (%.0f J.) wird feierlich zum Oberhaupt ernannt!",
+                           clanName.c_str(), elderChief.Name().c_str(), elderChief.AgeYears()), clanColor);
+
+    } else {
+        // --- PFAD C: FREIE STAMMESWAHL ---
+        std::unordered_map<int, int> votes;
+        for (int idx : candidateIndices) {
+            votes[cavemen[idx].Id()] = 0;
+            cavemen[idx].TriggerEmote(SocialEmote::Vote, 3.5f);
+        }
+
+        for (size_t i = 0; i < cavemen.size(); ++i) {
+            if (cavemen[i].IsDead()) continue;
+            int voterId = cavemen[i].Id();
+            int bestChoice = cavemen[candidateIndices[0]].Id();
+            float bestRep = -999.0f;
+
+            for (int cIdx : candidateIndices) {
+                int candId = cavemen[cIdx].Id();
+                float rep = rels.GetTrust(voterId, candId) * 1.2f + rels.GetRespect(voterId, candId) * 1.0f;
+                if (rep > bestRep) {
+                    bestRep = rep;
+                    bestChoice = candId;
+                }
+            }
+            votes[bestChoice]++;
+        }
+
+        int winnerId = -1;
+        int maxVotes = -1;
+        for (const auto& pair : votes) {
+            if (pair.second > maxVotes) {
+                maxVotes = pair.second;
+                winnerId = pair.first;
+            }
+        }
+
+        for (size_t i = 0; i < cavemen.size(); ++i) {
+            if (cavemen[i].Id() == winnerId) {
+                SetRank(winnerId, SocialRank::Chief);
+                cavemen[i].TriggerEmote(SocialEmote::Crown, 5.0f);
+                log.Add(TextFormat("Freie Stammeswahl im %s: %s gewinnt das Vertrauen mit %d Stimmen und wird zum Häuptling ernannt!",
+                                   clanName.c_str(), cavemen[i].Name().c_str(), maxVotes), clanColor);
+                break;
+            }
+        }
+    }
+}
+
+void SocialHierarchy::UpdateLeadership(const RelationshipManager& rels, std::vector<Caveman>& cavemen, EventLog& log, Color clanColor, const std::string& clanName) {
     leadershipCheckTimer_ += 1.0f;
     if (leadershipCheckTimer_ < 15.0f) return;
     leadershipCheckTimer_ = 0.0f;
 
     int currentLeader = kingdom_.monarchId;
+    std::string effClanName = !clanName.empty() ? clanName : (!clans_.empty() ? clans_[0].name : "Clan");
+    Color effColor = (clanColor.a > 0) ? clanColor : (!clans_.empty() ? clans_[0].bannerColor : GOLD);
 
-    // 1. Clan-Kohäsion (Zufriedenheit mit dem Hauptstamm) aktualisieren
+    // 1. Clan-Kohäsion aktualisieren
     int rulingClanId = (currentLeader >= 0) ? GetClanId(currentLeader) : -1;
     for (auto& clan : clans_) {
         int aliveMembers = 0;
@@ -197,7 +356,6 @@ void SocialHierarchy::UpdateLeadership(const RelationshipManager& rels, const st
             avgMorale /= (float)aliveMembers;
             avgRespectToChief /= (float)aliveMembers;
 
-            // Nicht-regierende Clans verlieren bei schlechter Moral oder Konflikten Kohäsion
             float delta = 0.0f;
             if (clan.id == rulingClanId) {
                 delta = +1.5f;
@@ -208,34 +366,20 @@ void SocialHierarchy::UpdateLeadership(const RelationshipManager& rels, const st
         }
     }
 
-    if (currentLeader < 0) return;
-
     // 2. Prüfe, ob der Anführer noch lebt
     bool leaderAlive = false;
-    for (const auto& c : cavemen) {
-        if (c.Id() == currentLeader && !c.IsDead()) {
-            leaderAlive = true;
-            break;
+    if (currentLeader >= 0) {
+        for (const auto& c : cavemen) {
+            if (c.Id() == currentLeader && !c.IsDead()) {
+                leaderAlive = true;
+                break;
+            }
         }
     }
 
     if (!leaderAlive) {
-        // Neuer Häuptling: Suche ältesten / angesehensten Erwachsenen
-        int bestCandidate = -1;
-        float bestScore = -1.0f;
-        for (const auto& c : cavemen) {
-            if (c.IsDead() || c.GetRole() == Role::Child) continue;
-            float score = (c.GetRole() == Role::Elder ? 50.0f : 25.0f)
-                        + c.GetPersonality().dominance * 25.0f + c.Ap() * 0.3f;
-            if (score > bestScore) {
-                bestScore = score;
-                bestCandidate = c.Id();
-            }
-        }
-        if (bestCandidate >= 0) {
-            SetRank(bestCandidate, SocialRank::Chief);
-            log.Add(TextFormat("Der alte Häuptling ist verstorben. Figur #%d übernimmt die Krone!", bestCandidate), GOLD);
-        }
+        kingdom_.monarchId = -1;
+        ElectLeader(cavemen, rels, log, effColor, effClanName);
         return;
     }
 
@@ -250,20 +394,150 @@ void SocialHierarchy::UpdateLeadership(const RelationshipManager& rels, const st
 
     float avgRespect = (count > 0) ? (totalRespect / (float)count) : 50.0f;
     if (avgRespect < 6.0f) {
-        for (const auto& c : cavemen) {
-            if (c.IsDead() || c.Id() == currentLeader) continue;
-            if ((c.GetRole() == Role::Hunter || c.GetRole() == Role::Elder) && c.GetPersonality().dominance > 0.25f) {
-                auto friends = rels.GetFriends(c.Id());
-                if (friends.size() >= 2) {
-                    SetRank(currentLeader, SocialRank::Worker);
-                    SetRank(c.Id(), SocialRank::Chief);
-                    log.Add(TextFormat("Machtwechsel! %s stürzt den unpopulären Häuptling und beansprucht die Krone!", c.Name().c_str()),
-                            { 255, 100, 100, 255 });
-                    break;
-                }
+        log.Add(TextFormat("Unruhe im %s! Das Volk verweigert dem Häuptling die Gefolgschaft – Neuwahl gefordert!", effClanName.c_str()), { 255, 120, 100, 255 });
+        SetRank(currentLeader, SocialRank::Worker);
+        kingdom_.monarchId = -1;
+        ElectLeader(cavemen, rels, log, effColor, effClanName);
+    }
+}
+
+void SocialHierarchy::Update(float dt) {
+    for (auto& clan : clans_) {
+        if (clan.politicsCooldown > 0.0f) {
+            clan.politicsCooldown = std::max(0.0f, clan.politicsCooldown - dt);
+        }
+    }
+}
+
+bool SocialHierarchy::CheckLeadershipChallenge(Tribe& tribe, std::vector<Caveman>& cavemen, EventLog& log) {
+    Clan* clan = GetClanMutable(tribe.Id());
+    if (clan && clan->politicsCooldown > 0.0f) {
+        return false;
+    }
+
+    int chiefId = GetChiefIdForClan(tribe.Id());
+    if (chiefId < 0) return false;
+
+    Caveman* chief = nullptr;
+    for (auto& c : cavemen) {
+        if (!c.IsDead() && c.Id() == chiefId && c.ClanId() == tribe.Id()) {
+            chief = &c;
+            break;
+        }
+    }
+    if (!chief) return false;
+
+    // Suche potenziellen Herausforderer mit hoher Dominanz und geringer Loyalität / geringem Respekt
+    Caveman* challenger = nullptr;
+    float highestChallengeScore = -100.0f;
+
+    for (auto& c : cavemen) {
+        if (c.IsDead() || c.ClanId() != tribe.Id() || c.Id() == chiefId) continue;
+        if (c.GetRole() == Role::Child) continue;
+        if (c.Hp() < 50.0f) continue; // Zu geschwächt für einen rituellen Kampf
+
+        float dominance = c.GetPersonality().dominance;
+        float respect = tribe.Relationships().GetRespect(c.Id(), chiefId);
+        float loyalty = c.Loyalty();
+
+        // Bedingung: Machthunger (dominance > 0.30f) und Unzufriedenheit (loyalty < 35.0f oder respect < 15.0f)
+        if (dominance > 0.30f && (loyalty < 35.0f || respect < 15.0f)) {
+            float score = dominance * 40.0f + (100.0f - loyalty) * 0.5f + (30.0f - respect) * 0.4f + c.Hp() * 0.2f;
+            if (score > highestChallengeScore) {
+                highestChallengeScore = score;
+                challenger = &c;
             }
         }
     }
+
+    if (!challenger) return false;
+
+    // Globaler Politik-Cooldown pro Clan von mindestens 150 Sekunden aktivieren!
+    if (clan) {
+        clan->politicsCooldown = 150.0f;
+    }
+
+    // Ankündigung im Event-Log (Phase 3.1)
+    log.Add(TextFormat("%s fordert Anführer %s im %s zum Kampf um die Führung heraus!",
+                       challenger->Name().c_str(), chief->Name().c_str(), tribe.Name().c_str()), { 255, 215, 0, 255 });
+
+    // Show, Don't Tell: Kampf- und Streit-Emotes
+    challenger->TriggerEmote(SocialEmote::Dispute, 4.5f);
+    chief->TriggerEmote(SocialEmote::Dispute, 4.5f);
+
+    // Nahe Clan-Mitglieder unterbrechen kurz und schauen im Kreis zu
+    for (auto& bystander : cavemen) {
+        if (bystander.IsAlive() && bystander.ClanId() == tribe.Id() && bystander.Id() != chief->Id() && bystander.Id() != challenger->Id()) {
+            if (Vector2Distance(bystander.Position(), chief->Position()) < 75.0f) {
+                bystander.TriggerEmote(SocialEmote::Vote, 3.5f);
+            }
+        }
+    }
+
+    // Realistische Chancen berechnen:
+    // Ein 20-jähriger Jäger mit Speer/Knüppel gewinnt ein Duell gegen einen gebrechlichen 68-jährigen Ältesten
+    // mit realistischer hoher Wahrscheinlichkeit (80-90%).
+    float ageVigorChallenger = (challenger->AgeYears() >= 18.0f && challenger->AgeYears() <= 38.0f) ? 35.0f :
+                               (challenger->AgeYears() > 50.0f) ? -(challenger->AgeYears() - 50.0f) * 1.5f : 0.0f;
+    float ageVigorChief = (chief->AgeYears() >= 18.0f && chief->AgeYears() <= 38.0f) ? 35.0f :
+                          (chief->AgeYears() > 50.0f) ? -(chief->AgeYears() - 50.0f) * 1.5f : 0.0f;
+
+    float roleBonusChallenger = (challenger->GetRole() == Role::Hunter) ? 35.0f :
+                                (challenger->GetRole() == Role::Elder) ? -20.0f : 0.0f;
+    float roleBonusChief = (chief->GetRole() == Role::Hunter) ? 35.0f :
+                           (chief->GetRole() == Role::Elder) ? -20.0f : 0.0f;
+
+    float weaponBonusChallenger = (challenger->GetWeaponTier() == WeaponTier::MetalBlade) ? 35.0f :
+                                  (challenger->GetWeaponTier() == WeaponTier::FlintSpear) ? 22.0f :
+                                  (challenger->GetWeaponTier() == WeaponTier::CompositeBow) ? 18.0f : 8.0f;
+    float weaponBonusChief = (chief->GetWeaponTier() == WeaponTier::MetalBlade) ? 35.0f :
+                             (chief->GetWeaponTier() == WeaponTier::FlintSpear) ? 22.0f :
+                             (chief->GetWeaponTier() == WeaponTier::CompositeBow) ? 18.0f : 8.0f;
+
+    float combatScoreChallenger = challenger->Hp() * 0.40f + challenger->Ap() * 0.25f +
+                                  challenger->GetPersonality().dominance * 20.0f +
+                                  challenger->GetPersonality().aggression * 12.0f +
+                                  ageVigorChallenger + roleBonusChallenger + weaponBonusChallenger +
+                                  (float)GetRandomValue(-8, 8);
+
+    float combatScoreChief = chief->Hp() * 0.40f + chief->Ap() * 0.25f +
+                             chief->GetPersonality().dominance * 20.0f +
+                             chief->GetPersonality().aggression * 12.0f +
+                             ageVigorChief + roleBonusChief + weaponBonusChief +
+                             (float)GetRandomValue(-8, 8);
+
+    if (combatScoreChallenger > combatScoreChief) {
+        // Herausforderer siegt!
+        chief->TakeDamageNonLethal(std::max(16.0f, chief->Hp() * 0.5f));
+        SetRank(chief->Id(), (chief->GetRole() == Role::Elder) ? SocialRank::Elder : SocialRank::Specialist);
+        SetRank(challenger->Id(), SocialRank::Chief);
+        if (clan) clan->chiefId = challenger->Id();
+
+        challenger->TriggerEmote(SocialEmote::Crown, 5.0f);
+        challenger->SetLoyalty(100.0f);
+        chief->SetLoyalty(25.0f); // Gedemütigter Ex-Häuptling ist unzufrieden
+
+        // Respektverschiebung im Clan
+        tribe.Relationships().GetOrCreate(challenger->Id(), chief->Id()).respect = 30.0f;
+        tribe.Relationships().GetOrCreate(chief->Id(), challenger->Id()).respect = -25.0f;
+
+        log.Add(TextFormat("[Machtwechsel im %s] %s bezwingt Häuptling %s im rituellen Duell und übernimmt die Herrschaft!",
+                           tribe.Name().c_str(), challenger->Name().c_str(), chief->Name().c_str()), tribe.FactionColor());
+    } else {
+        // Häuptling verteidigt Herrschaft!
+        challenger->TakeDamageNonLethal(std::max(18.0f, challenger->Hp() * 0.55f));
+        chief->TriggerEmote(SocialEmote::Crown, 4.0f);
+        chief->ModifyLoyalty(20.0f);
+
+        challenger->ModifyLoyalty(-35.0f); // Loyalität stürzt ab -> erhöht Chance auf Sezession
+        tribe.Relationships().GetOrCreate(challenger->Id(), chief->Id()).respect -= 25.0f;
+        tribe.Relationships().GetOrCreate(chief->Id(), challenger->Id()).respect -= 35.0f;
+
+        log.Add(TextFormat("[Machtkampf im %s] Häuptling %s schlägt den Aufständischen %s nieder und festigt seine Macht!",
+                           tribe.Name().c_str(), chief->Name().c_str(), challenger->Name().c_str()), tribe.FactionColor());
+    }
+
+    return true;
 }
 
 bool SocialHierarchy::CheckForSchism(const RelationshipManager& rels, const std::vector<Caveman>& cavemen,

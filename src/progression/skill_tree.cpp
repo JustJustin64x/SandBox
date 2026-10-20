@@ -77,7 +77,7 @@ void SkillTree::Init() {
         n.era = Era::StoneAge;
         n.isMilestone = true;
         n.state = TechState::Locked;
-        n.prereqIds = { 2 };
+        n.prereqIds = { 2, 3 }; // Kausale Progression: Steinklingen & Feuer/Fackeln nötig
         n.uiCol = 2; n.uiRow = 2;
         nodes_.push_back(n);
     }
@@ -91,7 +91,7 @@ void SkillTree::Init() {
         n.era = Era::StoneAge;
         n.isMilestone = true;
         n.state = TechState::Locked;
-        n.prereqIds = { 3 };
+        n.prereqIds = { 2, 3 }; // Fackel + Steinaxt/Hacke zur Erkundung
         n.requiresPOI = true;
         n.targetPOIType = POIType::LimestoneCave;
         n.gear = { true, true, true }; // Fackel + Hacke + Proviant
@@ -108,7 +108,7 @@ void SkillTree::Init() {
         n.era = Era::StoneAge;
         n.isMilestone = true;
         n.state = TechState::Locked;
-        n.prereqIds = { 2 };
+        n.prereqIds = { 2, 3 };
         n.requiresPOI = true;
         n.targetPOIType = POIType::AncientMegalith;
         n.gear = { false, false, true }; // Proviant
@@ -127,7 +127,7 @@ void SkillTree::Init() {
         n.era = Era::BronzeAge;
         n.isMilestone = true;
         n.state = TechState::Locked;
-        n.prereqIds = { 2 };
+        n.prereqIds = { 2, 3 };
         n.uiCol = 4; n.uiRow = 1;
         nodes_.push_back(n);
     }

@@ -50,6 +50,19 @@ int main() {
 
     // Kasten für das TAB-Menü (erweitert für Phase 1: Physik & Umwelt)
     Rectangle tabMenuBox = { SCREEN_WIDTH / 2.0f - 260.0f, SCREEN_HEIGHT / 2.0f - 210.0f, 520.0f, 420.0f };
+    Rectangle btnGrass   = { tabMenuBox.x + 30,  tabMenuBox.y + 75,  215, 33 };
+    Rectangle btnWater   = { tabMenuBox.x + 30,  tabMenuBox.y + 114, 215, 33 };
+    Rectangle btnForest  = { tabMenuBox.x + 30,  tabMenuBox.y + 153, 215, 33 };
+    Rectangle btnMan     = { tabMenuBox.x + 30,  tabMenuBox.y + 192, 215, 33 };
+    Rectangle btnWoman   = { tabMenuBox.x + 30,  tabMenuBox.y + 231, 215, 33 };
+    Rectangle btnAnimal  = { tabMenuBox.x + 30,  tabMenuBox.y + 270, 215, 33 };
+
+    Rectangle btnCursor  = { tabMenuBox.x + 275, tabMenuBox.y + 75,  215, 33 };
+    Rectangle btnFire    = { tabMenuBox.x + 275, tabMenuBox.y + 114, 215, 33 };
+    Rectangle btnGravity = { tabMenuBox.x + 275, tabMenuBox.y + 153, 215, 33 };
+    Rectangle btnWeather = { tabMenuBox.x + 275, tabMenuBox.y + 192, 215, 33 };
+    Rectangle btnRegen   = { tabMenuBox.x + 275, tabMenuBox.y + 231, 215, 33 };
+    Rectangle btnClose   = { tabMenuBox.x + 160, tabMenuBox.y + 325, 200, 38 };
 
     // =========================================================================
     // DIE SPIELSCHLEIFE
@@ -128,21 +141,6 @@ int main() {
 
             // WENN TAB-MENÜ OFFEN IST:
             if (showTabMenu) {
-                // Klickbare Buttons im TAB-Menü (Spalte 1: Terrain & Spawnen, Spalte 2: Cursor & Umwelt)
-                Rectangle btnGrass   = { tabMenuBox.x + 30,  tabMenuBox.y + 75,  215, 38 };
-                Rectangle btnWater   = { tabMenuBox.x + 30,  tabMenuBox.y + 122, 215, 38 };
-                Rectangle btnForest  = { tabMenuBox.x + 30,  tabMenuBox.y + 169, 215, 38 };
-                Rectangle btnHunter  = { tabMenuBox.x + 30,  tabMenuBox.y + 216, 215, 38 };
-                Rectangle btnAnimal  = { tabMenuBox.x + 30,  tabMenuBox.y + 263, 215, 38 };
-
-                Rectangle btnCursor  = { tabMenuBox.x + 275, tabMenuBox.y + 75,  215, 38 };
-                Rectangle btnFire    = { tabMenuBox.x + 275, tabMenuBox.y + 122, 215, 38 };
-                Rectangle btnGravity = { tabMenuBox.x + 275, tabMenuBox.y + 169, 215, 38 };
-                Rectangle btnWeather = { tabMenuBox.x + 275, tabMenuBox.y + 216, 215, 38 };
-                Rectangle btnRegen   = { tabMenuBox.x + 275, tabMenuBox.y + 263, 215, 38 };
-
-                Rectangle btnClose   = { tabMenuBox.x + 160, tabMenuBox.y + 325, 200, 38 };
-
                 auto selectAndClose = [&](SelectedAction act) {
                     // Klick auf bereits aktives Werkzeug wählt es wieder ab -> Normaler Cursor!
                     if (sim.GetCurrentAction() == act && act != SelectedAction::NONE) {
@@ -161,7 +159,8 @@ int main() {
                     else if (CheckCollisionPointRec(mousePos, btnGrass))   selectAndClose(SelectedAction::TERRAIN_GRASS);
                     else if (CheckCollisionPointRec(mousePos, btnWater))   selectAndClose(SelectedAction::TERRAIN_WATER);
                     else if (CheckCollisionPointRec(mousePos, btnForest))  selectAndClose(SelectedAction::TERRAIN_FOREST);
-                    else if (CheckCollisionPointRec(mousePos, btnHunter))  selectAndClose(SelectedAction::SPAWN_HUNTER);
+                    else if (CheckCollisionPointRec(mousePos, btnMan))     selectAndClose(SelectedAction::SPAWN_MAN);
+                    else if (CheckCollisionPointRec(mousePos, btnWoman))   selectAndClose(SelectedAction::SPAWN_WOMAN);
                     else if (CheckCollisionPointRec(mousePos, btnAnimal))  selectAndClose(SelectedAction::SPAWN_ANIMAL);
                     else if (CheckCollisionPointRec(mousePos, btnFire))    selectAndClose(SelectedAction::IGNITE_FIRE);
                     else if (CheckCollisionPointRec(mousePos, btnGravity)) selectAndClose(SelectedAction::GRAVITY_ANOMALY);
@@ -237,7 +236,8 @@ int main() {
                 if (act == SelectedAction::TERRAIN_GRASS)   actionName = "Gras malen";
                 if (act == SelectedAction::TERRAIN_WATER)   actionName = "Wasser malen";
                 if (act == SelectedAction::TERRAIN_FOREST)  actionName = "Wald pflanzen";
-                if (act == SelectedAction::SPAWN_HUNTER)    actionName = "Jäger spawnen";
+                if (act == SelectedAction::SPAWN_MAN || act == SelectedAction::SPAWN_HUNTER) actionName = "Mann erschaffen (♂)";
+                if (act == SelectedAction::SPAWN_WOMAN)     actionName = "Frau erschaffen (♀)";
                 if (act == SelectedAction::SPAWN_ANIMAL)    actionName = "Wildtier spawnen";
                 if (act == SelectedAction::IGNITE_FIRE)     actionName = "Feuer legen (Lauffeuer)";
                 if (act == SelectedAction::GRAVITY_ANOMALY) actionName = "Antigravitation (Zero-G)";
@@ -282,24 +282,23 @@ int main() {
                         Color fill = hov ? Fade(col, 0.95f) : Fade(col, 0.72f);
                         DrawRectangleRec(r, fill);
                         DrawRectangleLinesEx(r, isCurrent ? 2.5f : 1.0f, isCurrent ? GOLD : RAYWHITE);
-                        FontManager::DrawTextCenteredShadow(txt, r.x + r.width * 0.5f, r.y + (r.height - 18.0f) * 0.5f, 16.0f, RAYWHITE);
+                        FontManager::DrawTextCenteredShadow(txt, r.x + r.width * 0.5f, r.y + (r.height - 18.0f) * 0.5f, 15.0f, RAYWHITE);
                     };
 
                     FontManager::DrawTextShadow("--- Terrain & Natur ---", tabMenuBox.x + 30.0f, tabMenuBox.y + 54.0f, 15.0f, GRAY);
-                    drawBtn({ tabMenuBox.x + 30, tabMenuBox.y + 75,  215, 38 }, "1. Gras malen",      Color{ 40, 110, 50, 255 },  act == SelectedAction::TERRAIN_GRASS);
-                    drawBtn({ tabMenuBox.x + 30, tabMenuBox.y + 122, 215, 38 }, "2. Wasser malen",    Color{ 35, 80, 150, 255 },  act == SelectedAction::TERRAIN_WATER);
-                    drawBtn({ tabMenuBox.x + 30, tabMenuBox.y + 169, 215, 38 }, "3. Wald pflanzen",   Color{ 20, 80, 35, 255 },   act == SelectedAction::TERRAIN_FOREST);
-                    drawBtn({ tabMenuBox.x + 30, tabMenuBox.y + 216, 215, 38 }, "Jäger erschaffen",   Color{ 120, 60, 150, 255 }, act == SelectedAction::SPAWN_HUNTER);
-                    drawBtn({ tabMenuBox.x + 30, tabMenuBox.y + 263, 215, 38 }, "Wildtier erschaffen",Color{ 150, 90, 40, 255 },  act == SelectedAction::SPAWN_ANIMAL);
+                    drawBtn(btnGrass,  "1. Gras malen",        Color{ 40, 110, 50, 255 },  act == SelectedAction::TERRAIN_GRASS);
+                    drawBtn(btnWater,  "2. Wasser malen",      Color{ 35, 80, 150, 255 },  act == SelectedAction::TERRAIN_WATER);
+                    drawBtn(btnForest, "3. Wald pflanzen",     Color{ 20, 80, 35, 255 },   act == SelectedAction::TERRAIN_FOREST);
+                    drawBtn(btnMan,    "Mann erschaffen (♂)",  Color{ 55, 90, 160, 255 },  act == SelectedAction::SPAWN_MAN || act == SelectedAction::SPAWN_HUNTER);
+                    drawBtn(btnWoman,  "Frau erschaffen (♀)",  Color{ 150, 55, 120, 255 }, act == SelectedAction::SPAWN_WOMAN);
+                    drawBtn(btnAnimal, "Wildtier erschaffen",  Color{ 150, 90, 40, 255 },  act == SelectedAction::SPAWN_ANIMAL);
 
                     FontManager::DrawTextShadow("--- Göttliche Eingriffe ---", tabMenuBox.x + 275.0f, tabMenuBox.y + 54.0f, 15.0f, GOLD);
-                    drawBtn({ tabMenuBox.x + 275, tabMenuBox.y + 75,  215, 38 }, "Cursor (Beobachten)",  Color{ 45, 95, 135, 255 },  act == SelectedAction::NONE);
-                    drawBtn({ tabMenuBox.x + 275, tabMenuBox.y + 122, 215, 38 }, "Feuer legen (Lauffeuer)", Color{ 195, 65, 25, 255 },  act == SelectedAction::IGNITE_FIRE);
-                    drawBtn({ tabMenuBox.x + 275, tabMenuBox.y + 169, 215, 38 }, "Antigravitation (Zero-G)",Color{ 95, 70, 185, 255 },  act == SelectedAction::GRAVITY_ANOMALY);
-                    drawBtn({ tabMenuBox.x + 275, tabMenuBox.y + 216, 215, 38 },
-                            TextFormat("Wetter: %s", WeatherTypeName(sim.Env().GetWeather())),
-                            Color{ 60, 95, 130, 255 }, false);
-                    drawBtn({ tabMenuBox.x + 275, tabMenuBox.y + 263, 215, 38 }, "Neue Welt [R]", Color{ 160, 110, 40, 255 }, false);
+                    drawBtn(btnCursor,  "Cursor (Beobachten)",       Color{ 45, 95, 135, 255 },  act == SelectedAction::NONE);
+                    drawBtn(btnFire,    "Feuer legen (Lauffeuer)",   Color{ 195, 65, 25, 255 },  act == SelectedAction::IGNITE_FIRE);
+                    drawBtn(btnGravity, "Antigravitation (Zero-G)",  Color{ 95, 70, 185, 255 },  act == SelectedAction::GRAVITY_ANOMALY);
+                    drawBtn(btnWeather, TextFormat("Wetter: %s", WeatherTypeName(sim.Env().GetWeather())), Color{ 60, 95, 130, 255 }, false);
+                    drawBtn(btnRegen,   "Neue Welt [R]",             Color{ 160, 110, 40, 255 }, false);
 
                     // Schließen-Button
                     drawBtn({ tabMenuBox.x + 160, tabMenuBox.y + 325, 200, 38 }, "Schließen", Color{ 70, 70, 80, 255 }, false);
