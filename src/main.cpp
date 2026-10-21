@@ -2,6 +2,7 @@
 #include "simulation.h"
 #include "render_manager.h"
 #include "font_manager.h"
+#include "gfx/asset_manager.h"
 
 // -----------------------------------------------------------------------------
 // 1. ZUSTÄNDE DER ANWENDUNG
@@ -22,6 +23,9 @@ int main() {
 
     // HD-Font-System initialisieren (bilineares Filtering gegen verpixelten Text)
     FontManager::Init();
+
+    // Zentrales Asset-Management initialisieren (Texturen & Fallback-Pipeline)
+    AssetManager::Get().Init();
 
     // WICHTIG: Raylib daran hindern, das Fenster bei ESC zu schließen,
     // damit wir ESC als Pause-Taste im Spiel nutzen können!
@@ -325,6 +329,7 @@ int main() {
     }
 
     // Aufräumen & Beenden
+    AssetManager::Get().UnloadAll();
     FontManager::Shutdown();
     return 0;
 }

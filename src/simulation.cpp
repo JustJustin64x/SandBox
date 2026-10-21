@@ -1217,7 +1217,7 @@ void Simulation::DrawWorld() const {
             t->DrawTerritoryOverlay(world_, totalSimTime_);
         }
         t->POIs().Draw(camera_.Get(), totalSimTime_);
-        t->Draw(totalSimTime_, &world_, mouseWorld);
+        t->Draw(totalSimTime_, &world_, mouseWorld, false); // AUFTRAG PHASE 3: Gebäude separat im Y-Sort zeichnen
     }
 
     env_.DrawTileOverlays(world_, camera_.Get(), totalSimTime_);
@@ -1245,31 +1245,61 @@ void Simulation::DrawWorld() const {
         }
     }
 
-    // 7. Steinzeitmenschen Y-sortiert mit 2.5D Höhenversatz zeichnen
-    std::vector<const Caveman*> sortedCavemen;
-    sortedCavemen.reserve(cavemen_.size());
-    for (const auto& c : cavemen_) {
-        if (!c.IsDead()) sortedCavemen.push_back(&c);
-    }
-    std::sort(sortedCavemen.begin(), sortedCavemen.end(), [this](const Caveman* a, const Caveman* b) {
-        float yA = a->Position().y + world_.GetVisualYOffset(a->Position());
-        float yB = b->Position().y + world_.GetVisualYOffset(b->Position());
-        return yA < yB;
-    });
+    // 7. Strikte 2.5D Tiefen-/Y-Sortierung: Gebäude & Figuren gemeinsam sortieren
+    // AUFTRAG PHASE 3: Figuren stehen korrekt hinter oder vor Gebäuden
+    struct YDrawable {
+        float y;
+        std::function<void()> draw;
+    };
+    std::vector<YDrawable> renderList;
+    renderList.reserve(cavemen_.size() + 64);
 
     const Vector2 viewTL = GetScreenToWorld2D({ 0.0f, 0.0f }, camera_.Get());
     const Vector2 viewBR = GetScreenToWorld2D({ (float)SCREEN_WIDTH, (float)SCREEN_HEIGHT }, camera_.Get());
-    const Rectangle cullRect = { viewTL.x - 32.0f, viewTL.y - 48.0f, (viewBR.x - viewTL.x) + 64.0f, (viewBR.y - viewTL.y) + 96.0f };
+    const Rectangle cullRect = { viewTL.x - 48.0f, viewTL.y - 64.0f, (viewBR.x - viewTL.x) + 96.0f, (viewBR.y - viewTL.y) + 128.0f };
 
-    for (const auto* c : sortedCavemen) {
-        if (!CheckCollisionPointRec(c->Position(), cullRect)) continue;
-        bool highlighted = (c->Id() == selectedCavemanId_);
-        if (highlighted) {
-            c->DrawDebugPath();
+    // A) Gebäude aller aktiven Stämme
+    for (const auto& t : tribes_) {
+        if (t->IsDisbanded()) continue;
+        for (const auto& b : t->Buildings().All()) {
+            if (!CheckCollisionPointRec(b.position, cullRect)) continue;
+            float visualY = b.position.y + world_.GetVisualYOffset(b.position);
+            renderList.push_back({
+                visualY,
+                [tPtr = t.get(), b, visualY, mouseWorld, this]() {
+                    Building bCopy = b;
+                    bCopy.position.y = visualY;
+                    tPtr->Buildings().DrawBuilding(bCopy, totalSimTime_, mouseWorld);
+                }
+            });
         }
-        float visualYOffset = world_.GetVisualYOffset(c->Position());
-        bool isNight = (timeOfDay > 0.72f || timeOfDay < 0.22f);
-        c->Draw(spriteSheet_, highlighted, visualYOffset, isNight);
+    }
+
+    // B) Lebende Steinzeitmenschen
+    for (const auto& c : cavemen_) {
+        if (c.IsDead()) continue;
+        if (!CheckCollisionPointRec(c.Position(), cullRect)) continue;
+        float visualY = c.Position().y + world_.GetVisualYOffset(c.Position());
+        renderList.push_back({
+            visualY,
+            [&c, visualY, this, isNight]() {
+                bool highlighted = (c.Id() == selectedCavemanId_);
+                if (highlighted) {
+                    c.DrawDebugPath();
+                }
+                c.Draw(spriteSheet_, highlighted, visualY - c.Position().y, isNight);
+            }
+        });
+    }
+
+    // C) Sortierung nach visueller Y-Koordinate (Top-to-Bottom)
+    std::sort(renderList.begin(), renderList.end(), [](const YDrawable& a, const YDrawable& b) {
+        return a.y < b.y;
+    });
+
+    // D) In korrekter Z-Reihenfolge zeichnen
+    for (const auto& item : renderList) {
+        item.draw();
     }
 
     // 8. Aktions-Vorschau an Mausposition (nur wenn ein Werkzeug aktiv ausgewählt ist)

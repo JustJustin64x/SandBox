@@ -92,7 +92,7 @@ public:
     Vector2 StockpilePosition() const { return { campPos_.x + 22.0f, campPos_.y + 2.0f }; }
 
     void Update(const World& world, const std::vector<Caveman>& cavemen, int population, float dt, EventLog& log);
-    void Draw(float time, const World* world = nullptr, Vector2 mouseWorld = { -9999.0f, -9999.0f }) const;
+    void Draw(float time, const World* world = nullptr, Vector2 mouseWorld = { -9999.0f, -9999.0f }, bool drawBuildings = true) const;
 
     // --- Autonomer Siedlungsplaner (Stufe 1: Zero-Player-Bauentwicklung) -----
     struct SettlementPlan {

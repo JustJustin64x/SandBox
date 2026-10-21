@@ -2,6 +2,8 @@
 #include "config.h"
 #include "event_log.h"
 #include "sprite_sheet.h"
+#include "gfx/sprite_animator.h"
+#include "gfx/asset_manager.h"
 #include "tribe.h"
 #include "building.h"
 #include "world.h"
@@ -2450,18 +2452,56 @@ void Caveman::Draw(const SpriteSheet& sheet, bool highlighted, float visualYOffs
                            Fade(ORANGE, 0.25f), Fade(YELLOW, 0.0f));
     }
 
-    const RoleTraits& t = GetRoleTraits(role_);
-    int frame = 0;
-    if (isMoving_) {
-        frame = 1 + (int)(animTime_ * cfg::kWalkAnimFps) % 4;
-    }
-
     Color tint = (damageFlash_ > 0.0f) ? RED : WHITE;
     if (isSwimming_) {
         tint = ColorAlphaBlend(tint, Fade(SKYBLUE, 0.35f), WHITE);
     }
     float charScale = (role_ == Role::Child) ? 0.65f : 1.0f; // BLOCK 4.4: Kinder 65% Skalierung
-    sheet.Draw(t.spriteRow, frame, drawPos, facingLeft_, tint, charScale);
+
+    (void)sheet;
+    // AUFTRAG PHASE 4: SpriteAnimator & Layering (Basis-Körper -> Kleidung -> Waffe)
+    AnimState animState = AnimState::Idle;
+    if (state_ == CavemanState::Sleeping) {
+        animState = AnimState::Sleeping;
+    } else if (isMoving_) {
+        animState = AnimState::Walking;
+    } else if (phase_ == TaskPhase::Working || state_ == CavemanState::Crafting ||
+               state_ == CavemanState::Building || state_ == CavemanState::Hunting ||
+               state_ == CavemanState::GatheringFood || state_ == CavemanState::GatheringMaterials) {
+        animState = AnimState::Working;
+    }
+
+    std::string baseKey = (role_ == Role::Child) ? "entity_human_child" :
+                          ((gender_ == Gender::Female) ? "entity_human_female" : "entity_human_male");
+
+    std::string clothingKey = "";
+    switch (clothingTier_) {
+        case ClothingTier::RawHide:    clothingKey = "clothing_raw_hide"; break;
+        case ClothingTier::SewnFurs:   clothingKey = "clothing_sewn_furs"; break;
+        case ClothingTier::WovenTunic: clothingKey = "clothing_woven_tunic"; break;
+        case ClothingTier::Armor:      clothingKey = "clothing_armor"; break;
+        default: break;
+    }
+
+    std::string itemKey = "";
+    if (role_ == Role::Hunter) {
+        switch (weaponTier_) {
+            case WeaponTier::WoodClub:     itemKey = "item_club"; break;
+            case WeaponTier::FlintSpear:    itemKey = "item_spear"; break;
+            case WeaponTier::CompositeBow: itemKey = "item_bow"; break;
+            case WeaponTier::MetalBlade:   itemKey = "item_sword"; break;
+        }
+    } else if (carryingTorch_ && isDark) {
+        itemKey = "item_torch";
+    } else if (toolTier_ >= ToolTier::HaftedAxe) {
+        itemKey = "item_axe";
+    } else if (containerTier_ == ContainerTier::WovenBasket) {
+        itemKey = "item_basket";
+    }
+
+    // Mehrschichtiges Sprite-Rendering
+    SpriteAnimator::Get().DrawLayeredCharacter(baseKey, animState, animTime_, drawPos, facingLeft_,
+                                               tint, charScale, clothingKey, clanColor_, itemKey, WHITE);
 
     if (isSwimming_) {
         // Vordere Wasserwelle verdeckt die Beine beim Schwimmen

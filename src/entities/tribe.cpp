@@ -798,9 +798,11 @@ void Tribe::DrawTerritoryOverlay(const World& world, float /*simTime*/) const {
     }
 }
 
-void Tribe::Draw(float time, const World* world, Vector2 mouseWorld) const {
+void Tribe::Draw(float time, const World* world, Vector2 mouseWorld, bool drawBuildings) const {
     if (isDisbanded_) return; // Ausgelöschte Stämme ausblenden (BLOCK 3.5)
-    buildings_.Draw(time, world, mouseWorld);
+    if (drawBuildings) {
+        buildings_.Draw(time, world, mouseWorld);
+    }
     DrawStockpile(world);
 
     // Clan-Banner über dem Lagerfeuer/TownCenter (saubere Schrift & sanfte Ecken)

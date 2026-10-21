@@ -2,6 +2,7 @@
 #include "core/config.h"
 #include "world/world.h"
 #include "world/environmental_system.h"
+#include "gfx/sprite_animator.h"
 
 #include <algorithm>
 
@@ -389,15 +390,9 @@ void ResourceManager::Draw(const Camera2D& camera, const World* world) const {
 
             case ResourceType::Animal: {
                 if (!n.alive) break;
-                const float dir = n.facingLeft ? -1.0f : 1.0f;
-                const float legSwing = n.engaged ? 0.0f : std::sin(n.animTime * 12.0f) * 1.5f;
-                const Color fur = { 125, 85, 50, 255 };
-                DrawEllipse((int)x, (int)visualY, 6, 2, Fade(BLACK, 0.25f));
-                DrawLineEx({ x - 3.0f, visualY - 3.0f }, { x - 3.0f + legSwing, visualY }, 1.2f, { 80, 55, 30, 255 });
-                DrawLineEx({ x + 3.0f, visualY - 3.0f }, { x + 3.0f - legSwing, visualY }, 1.2f, { 80, 55, 30, 255 });
-                DrawEllipse((int)x, (int)(visualY - 4.0f), 6, 3, fur);
-                DrawCircleV({ x + 6.0f * dir, visualY - 6.0f }, 2.5f, fur);
-                DrawLineEx({ x + 6.0f * dir, visualY - 8.0f }, { x + 8.0f * dir, visualY - 10.5f }, 0.8f, { 230, 220, 200, 255 });
+                // AUFTRAG PHASE 4: Wildtier-Sprite mit SpriteAnimator & AssetManager
+                SpriteAnimator::Get().DrawAnimal("entity_animal_wild", { x, visualY }, n.animTime, !n.engaged, n.facingLeft);
+
                 if (n.panicTimer > 0.0f) {
                     DrawText("!", (int)x - 1, (int)(visualY - 16.0f), 10, ORANGE);
                 }

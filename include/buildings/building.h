@@ -24,6 +24,13 @@ enum class BuildingType {
     Outpost           // Bronzezeit – Grenzposten / Außenposten (stabiler territorialer Anker)
 };
 
+// AUFTRAG PHASE 3: Visuelle Zustände für Sprite-Rendering
+enum class BuildingVisualState {
+    UnderConstruction, // Gerüst / Baustelle
+    Intact,            // Fertiggestellt & funktionsfähig
+    Ruined             // Zerstört / Verfallen / Brennend
+};
+
 const char* BuildingTypeName(BuildingType type, int tier);
 
 struct ResourceCost {
@@ -46,6 +53,13 @@ struct Building {
     std::string customLabel;      // z.B. Name des Verstorbenen bei einem Ahnengrab (Grave)
     bool finished = false;
     bool underUpgrade = false;
+
+    // AUFTRAG PHASE 3: Ermittelt den aktuellen visuellen Sprite-Zustand
+    BuildingVisualState GetVisualState() const {
+        if (!finished || progress < 100.0f) return BuildingVisualState::UnderConstruction;
+        if (hp <= 25.0f) return BuildingVisualState::Ruined;
+        return BuildingVisualState::Intact;
+    }
 
     // Belegungs- & Arbeitersteuerung
     int builders = 0;
@@ -150,9 +164,9 @@ public:
     const Building* GetMainTownCenter() const;
 
     void Draw(float simTime, const World* world = nullptr, Vector2 mouseWorld = { -9999.0f, -9999.0f }) const;
+    void DrawBuilding(const Building& b, float simTime, Vector2 mouseWorld = { -9999.0f, -9999.0f }) const;
 
 private:
-    void DrawBuilding(const Building& b, float simTime, Vector2 mouseWorld = { -9999.0f, -9999.0f }) const;
     void DrawConstructionSite(const Building& b) const;
     void DrawTownCenter(const Building& b, float simTime) const;
     void DrawHut(const Building& b, float simTime) const;

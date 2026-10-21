@@ -20,14 +20,18 @@ public:
     void SetOpen(bool open) { isOpen_ = open; }
     void Toggle() { isOpen_ = !isOpen_; }
 
+    // AUFTRAG: Tab-System (Epochen-Filter)
+    int activeEpochTab = 1; // 1 = Steinzeit, 2 = Bronzezeit, 3 = Eisenzeit (1..14)
+
 private:
     void DrawNodeCard(const struct TechNode& node, Rectangle rect, bool isHovered, bool isFocused, float time) const;
     void DrawTooltip(const struct TechNode& node, const POIManager& pois, Vector2 mousePos) const;
-    void DrawConnectionLines(const SkillTree& skills, Rectangle eraBounds[3]) const;
+    void DrawConnectionLines(const SkillTree& skills, float boxX, float boxY) const;
 
     bool isOpen_ = false;
     int hoveredNodeId_ = -1;
     float animTimer_ = 0.0f;
+    int tabScrollOffset_ = 0;
 };
 
 #endif // SKILL_TREE_UI_H

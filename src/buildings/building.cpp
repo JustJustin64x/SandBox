@@ -4,6 +4,7 @@
 #include "age_manager.h"
 #include "event_log.h"
 #include "font_manager.h"
+#include "gfx/asset_manager.h"
 #include <cmath>
 #include <algorithm>
 
@@ -653,23 +654,84 @@ void BuildingManager::DrawBuilding(const Building& b, float simTime, Vector2 mou
     float x = b.position.x;
     float y = b.position.y;
 
-    // A) Mehrstufige Baustelle, solange das Gebäude noch nicht fertiggestellt ist (Meilenstein C)
-    if (!b.finished) {
-        DrawConstructionSite(b);
+    // AUFTRAG PHASE 3: Textur-basiertes Sprite-Rendering mit AssetManager & Fallback
+    BuildingVisualState vState = b.GetVisualState();
+    std::string texKey;
+    Vector2 spriteSize = { 32.0f, 32.0f };
+
+    if (vState == BuildingVisualState::UnderConstruction) {
+        texKey = (b.type == BuildingType::Hut) ? "building_scaffold" : "building_scaffold";
+        spriteSize = { 28.0f, 26.0f };
+    } else if (vState == BuildingVisualState::Ruined) {
+        texKey = "building_ruined";
+        spriteSize = { 32.0f, 24.0f };
     } else {
         switch (b.type) {
-            case BuildingType::TownCenter: DrawTownCenter(b, simTime); break;
-            case BuildingType::Hut:        DrawHut(b, simTime); break;
-            case BuildingType::Pantry:     DrawPantry(b); break;
-            case BuildingType::CraftBench: DrawCraftBench(b); break;
-            case BuildingType::Watchtower: DrawWatchtower(b, simTime); break;
-            case BuildingType::Kiln:       DrawKiln(b, simTime); break;
-            case BuildingType::FarmPlot:   DrawFarmPlot(b, simTime); break;
-            case BuildingType::AnimalPen:  DrawAnimalPen(b, simTime); break;
-            case BuildingType::Monument:    DrawMonument(b, simTime); break;
-            case BuildingType::Grave:       DrawGrave(b, simTime); break;
-            case BuildingType::BorderTotem: DrawBorderTotem(b, simTime); break;
-            case BuildingType::Outpost:     DrawOutpost(b, simTime); break;
+            case BuildingType::TownCenter:
+                texKey = "building_towncenter_" + std::to_string(std::clamp(b.tier, 1, 3));
+                spriteSize = (b.tier == 1) ? Vector2{ 38.0f, 38.0f } : Vector2{ 48.0f, 44.0f };
+                break;
+            case BuildingType::Hut:
+                texKey = "building_hut_" + std::to_string(std::clamp(b.tier, 1, 3));
+                spriteSize = Vector2{ 28.0f + (float)b.tier * 2.0f, 26.0f + (float)b.tier * 3.0f };
+                break;
+            case BuildingType::Pantry:
+                texKey = "building_pantry";
+                spriteSize = { 32.0f, 28.0f };
+                break;
+            case BuildingType::CraftBench:
+                texKey = "building_craftbench";
+                spriteSize = { 28.0f, 24.0f };
+                break;
+            case BuildingType::Watchtower:
+                texKey = "building_watchtower";
+                spriteSize = { 26.0f, 52.0f };
+                break;
+            case BuildingType::Kiln:
+                texKey = "building_kiln";
+                spriteSize = { 26.0f, 28.0f };
+                break;
+            case BuildingType::FarmPlot:
+                texKey = "building_farmplot";
+                spriteSize = { 32.0f, 28.0f };
+                break;
+            case BuildingType::AnimalPen:
+                texKey = "building_animalpen";
+                spriteSize = { 36.0f, 32.0f };
+                break;
+            case BuildingType::Monument:
+                texKey = "building_monument";
+                spriteSize = { 30.0f, 44.0f };
+                break;
+            case BuildingType::Grave:
+                texKey = "building_grave";
+                spriteSize = { 20.0f, 18.0f };
+                break;
+            case BuildingType::BorderTotem:
+                texKey = "building_bordertotem";
+                spriteSize = { 18.0f, 34.0f };
+                break;
+            case BuildingType::Outpost:
+                texKey = "building_outpost";
+                spriteSize = { 32.0f, 38.0f };
+                break;
+        }
+    }
+
+    // A) Sprite zeichnen mit Z-Anchor an der Bodenkante
+    Rectangle destRect = { x - spriteSize.x * 0.5f, y - spriteSize.y + 4.0f, spriteSize.x, spriteSize.y };
+    Color tint = WHITE;
+    if (b.hp < b.maxHp * 0.5f) {
+        tint = Color{ 230, 190, 190, 255 };
+    }
+    AssetManager::Get().DrawTile(texKey, destRect, tint);
+
+    // B) Dynamische Overlays (Lagerfeuer-Flammen, Upgrade-Gerüste)
+    if (b.finished) {
+        if ((b.type == BuildingType::TownCenter || b.type == BuildingType::Kiln) && b.HasActiveFire()) {
+            float flick = std::sin(simTime * 12.0f) * 0.5f;
+            DrawCircleV({ x, y - 4.0f }, 3.5f + flick * 0.5f, Fade(ORANGE, 0.85f));
+            DrawCircleV({ x, y - 5.0f }, 2.0f, Fade(YELLOW, 0.90f));
         }
 
         // Baugerüst-Streben während eines laufenden Upgrades auf nächste Epochen-Stufe
@@ -678,25 +740,19 @@ void BuildingManager::DrawBuilding(const Building& b, float simTime, Vector2 mou
             DrawLineEx({ x + 14.0f, y + 1.0f }, { x + 14.0f, y - 20.0f }, 1.5f, { 185, 135, 70, 235 });
             DrawLineEx({ x - 15.0f, y - 10.0f }, { x + 15.0f, y - 10.0f }, 1.2f, { 185, 135, 70, 215 });
         }
-
-        // Sichtbare Verschleiß-/Riss-Spuren, wenn Struktur-HP durch Wetter/Feuer unter 70% fällt
-        if (b.hp < b.maxHp * 0.70f) {
-            DrawLineEx({ x - 4.0f, y - 11.0f }, { x - 1.0f, y - 5.0f }, 1.2f, Color{ 45, 30, 20, 220 });
-            DrawLineEx({ x - 1.0f, y - 5.0f },  { x + 2.0f, y - 8.0f }, 1.0f, Color{ 45, 30, 20, 220 });
-        }
     }
 
-    // Aktive Baustellen: Zeichne ausschließlich einen minimalen, textlosen Fortschrittsbalken (16x3 Pixel, dezent grün/grau) direkt über dem Gerüst (BLOCK 4.1)
+    // Aktive Baustellen: Zeichne Fortschrittsbalken
     if (!b.finished || b.underUpgrade) {
-        float barY = y - 24.0f;
+        float barY = y - spriteSize.y - 4.0f;
         float pct = std::clamp(b.progress / 100.0f, 0.0f, 1.0f);
         DrawRectangleRec({ x - 8.0f, barY, 16.0f, 3.0f }, Fade(Color{ 35, 40, 45, 255 }, 0.85f));
         DrawRectangleRec({ x - 8.0f, barY, 16.0f * pct, 3.0f }, Color{ 70, 215, 110, 255 });
     }
 
-    // Hover-Only-Regel (BLOCK 4.1): Name und Zustand AUSSCHLIESSLICH bei direktem Mouse-Hover (<= 1.2 Kacheln)
+    // Hover-Info
     if (Vector2Distance(mouseWorld, b.position) <= 1.2f * TILE_SIZE) {
-        float labelY = y - 36.0f;
+        float labelY = y - spriteSize.y - 14.0f;
         std::string label;
         if (!b.finished) {
             label = TextFormat("%s (%d%%)", BuildingTypeName(b.type, b.tier), (int)b.progress);

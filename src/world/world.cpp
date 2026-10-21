@@ -1,5 +1,6 @@
 #include "world/world.h"
 #include "world/environmental_system.h"
+#include "gfx/asset_manager.h"
 #include "entities/tribe.h"
 #include "entities/caveman.h"
 
@@ -1599,8 +1600,25 @@ void World::Draw(const Camera2D& camera) const {
             const int px = x * TILE_SIZE;
             const int py = (int)((float)(y * TILE_SIZE) - (float)td.heightLevel * ELEVATION_PIXEL_HEIGHT);
 
-            // Obere Kachel-Platte
-            DrawRectangle(px, py, TILE_SIZE, TILE_SIZE, c);
+            // Obere Kachel-Platte: Textur aus AssetManager mit Auto-Tiling / Variationen
+            const char* texKey = "terrain_grass_0";
+            switch (td.type) {
+                case TILE_DEEP_WATER:    texKey = "terrain_deep_water"; break;
+                case TILE_SHALLOW_WATER: texKey = "terrain_shallow_water"; break;
+                case TILE_SAND:          texKey = "terrain_sand"; break;
+                case TILE_GRASS: {
+                    int v = std::abs((int)(x * 73856093 ^ y * 19349663)) % 3;
+                    texKey = (v == 0) ? "terrain_grass_0" : ((v == 1) ? "terrain_grass_1" : "terrain_grass_2");
+                    break;
+                }
+                case TILE_FOREST:        texKey = "terrain_forest"; break;
+                case TILE_MOUNTAIN:      texKey = "terrain_mountain"; break;
+                case TILE_SNOW:          texKey = "terrain_snow"; break;
+                default:                 texKey = "terrain_grass_0"; break;
+            }
+
+            Rectangle tileDest = { (float)px, (float)py, (float)TILE_SIZE, (float)TILE_SIZE };
+            AssetManager::Get().DrawTile(texKey, tileDest, c);
 
             // 3. Drop Shadows & Ambient Occlusion (wenn Nord- oder Westnachbar höher liegt)
             if (y > 0 && tiles_[(size_t)((y - 1) * width_ + x)].heightLevel > td.heightLevel) {
@@ -1650,8 +1668,9 @@ void World::Draw(const Camera2D& camera) const {
                 int cliffH = (int)((float)(td.heightLevel - hSouth) * ELEVATION_PIXEL_HEIGHT);
                 int cliffY = py + TILE_SIZE;
 
-                // Grundkörper der Klippenwand
-                DrawRectangle(px, cliffY, TILE_SIZE, cliffH, Color{ 64, 58, 54, 255 });
+                // Grundkörper der Klippenwand mit Klippen-Textur
+                Rectangle cliffRect = { (float)px, (float)cliffY, (float)TILE_SIZE, (float)cliffH };
+                AssetManager::Get().DrawTile("terrain_cliff", cliffRect, Color{ 64, 58, 54, 255 });
 
                 // Horizontale Sediment-/Gesteinsschichten (Schiefer, Granit)
                 for (int s = 2; s < cliffH - 1; s += 3) {

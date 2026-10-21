@@ -23,6 +23,7 @@ void SkillTree::Init() {
         n.description = "Bändigung der Flammen. Spendet lebenswichtige Wärme, schützt vor Kälte und kocht Speisen.";
         n.benefit = "Lagerfeuer spendet Wärme; Basisschutz";
         n.era = Era::StoneAge;
+        n.epochId = 1;
         n.isMilestone = false;
         n.state = TechState::Mastered; // Vom Start weg bekannt
         n.progress = 100.0f;
@@ -37,6 +38,7 @@ void SkillTree::Init() {
         n.description = "Abschlagen scharfer Feuersteinkanten. Ermöglicht Faustkeile, Speere und Steinspitzhacken.";
         n.benefit = "Schaltet Faustkeil, Speer & Spitzhacken-Herstellung frei";
         n.era = Era::StoneAge;
+        n.epochId = 1;
         n.isMilestone = false;
         n.state = TechState::Ready; // Root Tier 1a
         n.prereqIds = {};
@@ -52,6 +54,7 @@ void SkillTree::Init() {
         n.description = "Gerben von Tierhäuten mit Knochennadeln und Flechten von Weidenkörben.";
         n.benefit = "Schaltet Pelzkleidung (+Kälteschutz) & Tragekörbe (2x Traglast) frei";
         n.era = Era::StoneAge;
+        n.epochId = 1;
         n.isMilestone = false;
         n.state = TechState::Locked;
         n.prereqIds = { 1, 2 };
@@ -67,6 +70,7 @@ void SkillTree::Init() {
         n.description = "Zähmen und Halten von Tieren in Gattern. Liefert stetig Wolle, Milch und Fleisch.";
         n.benefit = "Ermöglicht Tiergehege & Domestizierung";
         n.era = Era::StoneAge;
+        n.epochId = 1;
         n.isMilestone = false;
         n.state = TechState::Locked;
         n.prereqIds = { 1, 2 };
@@ -82,6 +86,7 @@ void SkillTree::Init() {
         n.description = "Harzgetränkte Holzscheite. Erhellen tiefe Höhlen und vertreiben nachtaktive Raubtiere.";
         n.benefit = "Ermöglicht das Betreten dunkler Höhlen & Kompositbögen";
         n.era = Era::StoneAge;
+        n.epochId = 1;
         n.isMilestone = false;
         n.state = TechState::Locked;
         n.prereqIds = { 1, 2 };
@@ -98,6 +103,7 @@ void SkillTree::Init() {
         n.description = "Beobachtung wilder Pflanzen und Samen beim Sammeln. Ermöglicht gezielte Aussaat und Domestizierung.";
         n.benefit = "Neolithikum-Meilenstein! Schaltet Ackerland, Viehpferch & Vorratskammer frei";
         n.era = Era::StoneAge;
+        n.epochId = 1;
         n.isMilestone = true;
         n.state = TechState::Locked;
         n.prereqIds = { 13, 15 }; // Benötigt Tier 1b (Fellkleidung/Körbe oder Tierzucht)
@@ -113,6 +119,7 @@ void SkillTree::Init() {
         n.description = "Erforschung des Höhlensystems. Funde uralter Zeichnungen und geologischer Erzspuren.";
         n.benefit = "Epochen-Meilenstein! Schaltet Erzsuche frei";
         n.era = Era::StoneAge;
+        n.epochId = 1;
         n.isMilestone = true;
         n.state = TechState::Locked;
         n.prereqIds = { 3, 13 }; // Benötigt Fackeln & Tier 1b
@@ -131,6 +138,7 @@ void SkillTree::Init() {
         n.description = "Errichtung und Verehrung gewaltiger Steinblöcke. Stärkt den Stammeszusammenhalt und die Kultur.";
         n.benefit = "Epochen-Meilenstein! +20% Stammes-Morale";
         n.era = Era::StoneAge;
+        n.epochId = 1;
         n.isMilestone = true;
         n.state = TechState::Locked;
         n.prereqIds = { 13, 15 };
@@ -151,6 +159,7 @@ void SkillTree::Init() {
         n.description = "Fügen und Spalten von Holz. Erlaubt Holzbalken, geschäftete Äxte, feste Blockhütten (Stufe 2) und Werkbänke.";
         n.benefit = "Epochen-Meilenstein! Schaltet Werkbank, Steinaxt & Balken frei";
         n.era = Era::BronzeAge;
+        n.epochId = 2;
         n.isMilestone = true;
         n.state = TechState::Locked;
         n.prereqIds = { 13, 15 };
@@ -166,6 +175,7 @@ void SkillTree::Init() {
         n.description = "Ausbeutung oberflächennaher Kupfervorkommen aus freiliegenden Gesteinsadern.";
         n.benefit = "Ermöglicht Rohkupfer-Erze für Legierungen";
         n.era = Era::BronzeAge;
+        n.epochId = 2;
         n.isMilestone = false;
         n.state = TechState::Locked;
         n.prereqIds = { 4 };
@@ -183,6 +193,7 @@ void SkillTree::Init() {
         n.description = "Gewinnung von Kassiterit-Zinnkörnern aus Flussbetten und sandigen Ufern.";
         n.benefit = "Ermöglicht Zinnwäsche für Bronzelegierung";
         n.era = Era::BronzeAge;
+        n.epochId = 2;
         n.isMilestone = false;
         n.state = TechState::Locked;
         n.prereqIds = { 4 };
@@ -200,6 +211,7 @@ void SkillTree::Init() {
         n.description = "Schmelzen von Kupfer und Zinn zu harter Bronze. Revolutioniert alle Werkzeuge, Tuniken und Bauten.";
         n.benefit = "Epochen-Meilenstein! Bronzewerkzeuge & +35% Arbeitstempo";
         n.era = Era::BronzeAge;
+        n.epochId = 2;
         n.isMilestone = true;
         n.state = TechState::Locked;
         n.prereqIds = { 7, 8 };
@@ -216,6 +228,7 @@ void SkillTree::Init() {
         n.description = "Hohe Schmelztemperaturen im Rennfeuer. Verhüttet Eisenerz zu formbarem Schmiedeeisen.";
         n.benefit = "Epochen-Meilenstein! Eisenwerkzeuge, Waffen & Rüstung";
         n.era = Era::IronAge;
+        n.epochId = 3;
         n.isMilestone = true;
         n.state = TechState::Locked;
         n.prereqIds = { 9 };
@@ -233,6 +246,7 @@ void SkillTree::Init() {
         n.description = "Präzises Behauen von Natursteinen und Straßenpflaster. Erlaubt feste Steinhäuser (Stufe 3).";
         n.benefit = "Epochen-Meilenstein! Steinhäuser & Gepflasterte Straßen";
         n.era = Era::IronAge;
+        n.epochId = 3;
         n.isMilestone = true;
         n.state = TechState::Locked;
         n.prereqIds = { 9 };
@@ -247,6 +261,7 @@ void SkillTree::Init() {
         n.description = "Befestigte Wachtürme mit Rundumsicht. Frühwarnung vor Raubtieren und fremden Überfällen.";
         n.benefit = "Schaltet Wachtürme & erweiterte Sicht frei";
         n.era = Era::IronAge;
+        n.epochId = 3;
         n.isMilestone = false;
         n.state = TechState::Locked;
         n.prereqIds = { 6, 11 };

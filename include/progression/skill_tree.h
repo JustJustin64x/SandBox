@@ -22,6 +22,7 @@ struct TechNode {
     std::string description;
     std::string benefit;
     Era era = Era::StoneAge;
+    int epochId = 1;           // AUFTRAG: Epochen-ID für Tab-System (1 = Steinzeit, 2 = Bronzezeit, 3 = Eisenzeit, 1..14)
     bool isMilestone = false;  // Zwingend für Zeitalter-Aufstieg!
 
     TechState state = TechState::Locked;
