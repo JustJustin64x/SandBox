@@ -9,6 +9,9 @@ SkillTree::SkillTree() {
 void SkillTree::Init() {
     nodes_.clear();
     focusNodeId_ = -1;
+    isNeolithic = false;
+    isBronzeAge = false;
+    isIronAge = false;
 
     // --- 1. Steinzeit --------------------------------------------------------
     // Root Tier 1a: Feuer und Steinklingen
@@ -254,12 +257,129 @@ void SkillTree::Init() {
 
 void SkillTree::Update(POIManager& pois, EventLog& log) {
     RefreshNodeStates(pois, log);
+    CheckEpochAdvancement(nullptr, &log);
+}
+
+bool SkillTree::CanResearchNode(const TechNode& node) const {
+    // 1. Spalte 2 (Bronze- & Werkzeugzeit): Erst erforschbar, wenn ALLE Meilensteine der Steinzeit gemeistert sind!
+    if (node.era == Era::BronzeAge) {
+        if (!AreEraMilestonesCompleted(Era::StoneAge)) return false;
+    }
+    // 2. Spalte 3 (Siedlungs- & Eisenzeit): Erst erforschbar, wenn Kupfer, Zinn UND Bronzelegierung gemeistert sind!
+    else if (node.era == Era::IronAge) {
+        if (!IsUnlocked("copper") || !IsUnlocked("tin") || !IsUnlocked("bronze")) return false;
+    }
+
+    // 3. Direkte Technologie-Voraussetzungen prüfen (z.B. Rennofen & Eisen benötigt zwingend Bronzelegierung & Guss)
+    if (!node.prereqIds.empty()) {
+        if (node.requireAnyPrereq) {
+            bool anyMet = false;
+            for (int pid : node.prereqIds) {
+                const auto* pnode = GetNode(pid);
+                if (pnode && pnode->state == TechState::Mastered) {
+                    anyMet = true;
+                    break;
+                }
+            }
+            if (!anyMet) return false;
+        } else {
+            for (int pid : node.prereqIds) {
+                const auto* pnode = GetNode(pid);
+                if (!pnode || pnode->state != TechState::Mastered) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+bool SkillTree::CanResearch(int id) const {
+    const auto* node = GetNode(id);
+    return node && CanResearchNode(*node);
+}
+
+bool SkillTree::CanResearch(const std::string& key) const {
+    const auto* node = GetNodeByKey(key);
+    return node && CanResearchNode(*node);
+}
+
+bool SkillTree::IsResearched(const std::string& nameOrKey) const {
+    for (const auto& node : nodes_) {
+        if (node.name == nameOrKey || node.key == nameOrKey) {
+            return node.state == TechState::Mastered;
+        }
+    }
+    return false;
+}
+
+void SkillTree::TriggerNeolithic(AgeManager* age, EventLog* log) {
+    isNeolithic = true;
+    if (age) {
+        age->SetEpoch(HistoricalEpoch::Neolithic, log);
+    }
+    if (log) {
+        log->Add("====================================================", { 180, 235, 130, 255 });
+        log->Add("EPOCHE II ERREICHT: Späte Steinzeit / Neolithikum!", { 180, 235, 130, 255 });
+        log->Add("Sesshaftigkeit, Vorratshaltung und früher Ackerbau entstehen kausal!", { 210, 245, 175, 255 });
+        log->Add("====================================================", { 180, 235, 130, 255 });
+    }
+    EventLog::AddMessage("EPOCHE II ERREICHT: Späte Steinzeit / Neolithikum!", { 180, 235, 130, 255 });
+}
+
+void SkillTree::TriggerBronzeAge(AgeManager* age, EventLog* log) {
+    isBronzeAge = true;
+    if (age) {
+        age->SetEra(Era::BronzeAge, log);
+        age->SetEpoch(HistoricalEpoch::BronzeAge, log);
+    }
+    if (log) {
+        log->Add("====================================================", GOLD);
+        log->Add("EPOCHE IV ERREICHT: Hochblüte der Bronzezeit!", GOLD);
+        log->Add("Bronzelegierungen, spezialisierte Werkstätten und Handelswege entstehen!", { 255, 230, 100, 255 });
+        log->Add("====================================================", GOLD);
+    }
+    EventLog::AddMessage("EPOCHE IV ERREICHT: Hochblüte der Bronzezeit!", GOLD);
+}
+
+void SkillTree::TriggerIronAge(AgeManager* age, EventLog* log) {
+    isIronAge = true;
+    if (age) {
+        age->SetEra(Era::IronAge, log);
+        age->SetEpoch(HistoricalEpoch::IronAge, log);
+    }
+    if (log) {
+        log->Add("====================================================", SKYBLUE);
+        log->Add("EPOCHE V ERREICHT: Die Eisenzeit!", SKYBLUE);
+        log->Add("Rennöfen, Eisenwerkzeuge und befestigte Siedlungen prägen die Welt!", { 170, 230, 255, 255 });
+        log->Add("====================================================", SKYBLUE);
+    }
+    EventLog::AddMessage("EPOCHE V ERREICHT: Die Eisenzeit!", SKYBLUE);
+}
+
+void SkillTree::CheckEpochAdvancement(AgeManager* age, EventLog* log) {
+    if (!isNeolithic && IsResearched("Ackerbau & Saatgut") && IsResearched("Steinklingen & Keile")) {
+        TriggerNeolithic(age, log);
+    }
+    if (!isBronzeAge && IsResearched("Bronzelegierung & Guss")) {
+        TriggerBronzeAge(age, log);
+    }
+    if (!isIronAge && IsResearched("Rennofen & Eisen")) {
+        TriggerIronAge(age, log);
+    }
 }
 
 void SkillTree::RefreshNodeStates(const POIManager& pois, EventLog& log) {
     for (auto& node : nodes_) {
         if (node.state == TechState::Mastered) {
             node.progress = node.requiredPractice;
+            continue;
+        }
+
+        // Strikte Epochen-Schranke (Hard Gating)
+        if (!CanResearchNode(node)) {
+            node.state = TechState::Locked;
             continue;
         }
 
@@ -296,6 +416,8 @@ void SkillTree::RefreshNodeStates(const POIManager& pois, EventLog& log) {
             const auto* poi = pois.GetByType(node.targetPOIType);
             if (!poi || !poi->spawned) {
                 node.state = TechState::Locked; // POI noch nicht in der Welt gespawnt
+            } else if (!CanResearchNode(node)) {
+                node.state = TechState::Locked; // Strikte Epochen-Schranke: Zukünftige Spalte gesperrt
             } else if (poi->state == POIState::Explored) {
                 node.progress = node.requiredPractice;
                 CompleteNode(node.id, log);
@@ -321,6 +443,9 @@ bool SkillTree::AddPractice(const std::string& key, float amount, EventLog& log,
     if (amount <= 0.0f) return false;
     auto* node = GetNodeByKey(key);
     if (!node || node->state == TechState::Mastered) return false;
+
+    // Strikte Epochen-Schranke: Höhere Epochen dürfen vor Erfüllung der Vorbedingungen keine Punkte erhalten!
+    if (!CanResearchNode(*node)) return false;
 
     // Wenn der Stamm diese Technologie gerade aktiv fokussiert, lernt er schneller (+35%)
     float mult = (focusNodeId_ == node->id) ? 1.35f : 1.0f;
@@ -398,7 +523,7 @@ void SkillTree::AutoSelectFocus(Era currentEra, bool coldUrgent, bool toolsUrgen
 
     // 5. Beliebige bereite Technologie
     for (const auto& n : nodes_) {
-        if (n.state == TechState::Ready) {
+        if (n.state == TechState::Ready && CanResearchNode(n)) {
             focusNodeId_ = n.id;
             return;
         }
@@ -408,6 +533,7 @@ void SkillTree::AutoSelectFocus(Era currentEra, bool coldUrgent, bool toolsUrgen
 bool SkillTree::CompleteNode(int id, EventLog& log, const std::string& actorName) {
     auto* node = GetNode(id);
     if (!node || node->state == TechState::Mastered) return false;
+    if (!CanResearchNode(*node)) return false;
 
     node->state = TechState::Mastered;
     node->progress = node->requiredPractice;
@@ -421,6 +547,7 @@ bool SkillTree::CompleteNode(int id, EventLog& log, const std::string& actorName
     if (focusNodeId_ == id) {
         focusNodeId_ = -1;
     }
+    CheckEpochAdvancement(nullptr, &log);
     return true;
 }
 

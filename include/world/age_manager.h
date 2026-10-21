@@ -55,6 +55,8 @@ public:
     Era CurrentEra() const { return currentEra_; }
     int EraIndex() const { return static_cast<int>(currentEra_); }
     HistoricalEpoch CurrentEpoch() const { return currentEpoch_; }
+    void SetEra(Era era, EventLog* log = nullptr);
+    void SetEpoch(HistoricalEpoch epoch, EventLog* log = nullptr);
     float ResearchPoints() const { return researchPoints_; }
     float EraElapsedTime() const { return eraElapsedTime_; }
     float RequiredEraDuration(Era era) const;

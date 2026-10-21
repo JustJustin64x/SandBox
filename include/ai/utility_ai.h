@@ -31,6 +31,22 @@ public:
     // Bewertet alle Handlungsoptionen und wählt situativ die beste Aktion
     static UtilityDecision Evaluate(const Caveman& agent, const WorldContext& ctx);
 
+    // AUFTRAG PHASE 1.3: Fortpflanzungs-Priorität & Paarungs-Score
+    static float CalculateMateScore(const Caveman& agent, const Caveman& target, const WorldContext& ctx, std::string& outReason);
+    static float CalculateMateScore(const Caveman& agent, const WorldContext& ctx, int& outPartnerId, std::string& outReason);
+
+    // AUFTRAG PHASE 2.2: Gesundheits-Check für Schisma / Secede
+    static float CalculateSecedeScore(const Caveman& agent, const WorldContext& ctx, std::string& outReason);
+    static float CalculateSecedeScore(const Caveman* caveman, const WorldContext& ctx, std::string& outReason);
+    static float CalculateFormNewTribeScore(const Caveman& agent, const WorldContext& ctx, std::string& outReason);
+    static float CalculateFormNewTribeScore(const Caveman* caveman, const WorldContext& ctx, std::string& outReason);
+
+    // AUFTRAG PHASE 4.1: Cooldown für TeachChild & Lehre-Score
+    static float CalculateTeachChildScore(const Caveman* caveman, const Caveman* target, const WorldContext& ctx, std::string& outReason);
+    static float CalculateTeachChildScore(const Caveman& caveman, const Caveman& target, const WorldContext& ctx, std::string& outReason);
+    static float CalculateTeachChildScore(const Caveman* caveman, const WorldContext& ctx, int& outChildId, std::string& outReason);
+    static float CalculateTeachChildScore(const Caveman& caveman, const WorldContext& ctx, int& outChildId, std::string& outReason);
+
 private:
     static float ScoreFlee(const Caveman& agent, const WorldContext& ctx, std::string& outReason);
     static float ScoreEat(const Caveman& agent, const WorldContext& ctx, std::string& outReason);

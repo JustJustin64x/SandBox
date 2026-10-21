@@ -21,3 +21,6 @@ bin/
 # Betriebssystem-Dateien
 .DS_Store
 Thumbs.db
+
+# Laufzeit-Logs
+chat_log*.txt

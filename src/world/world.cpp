@@ -637,6 +637,33 @@ void World::SetTile(int x, int y, TileType type) {
     tiles_[(size_t)(y * width_ + x)].type = type;
 }
 
+TileData World::GetTile(float px, float py) const {
+    int tx = ToTile(px);
+    int ty = ToTile(py);
+    if (!IsInBounds(tx, ty)) {
+        TileData td;
+        td.isWalkable = false;
+        return td;
+    }
+    TileData td = tiles_[(size_t)(ty * width_ + tx)];
+    td.isWalkable = IsWalkableTile(tx, ty);
+    if (env_ && env_->GetState(tx, ty).isBurning) {
+        td.isOnFire = true;
+    }
+    return td;
+}
+
+bool World::IsTileOnFire(int x, int y) const {
+    if (!IsInBounds(x, y)) return false;
+    if (tiles_[(size_t)(y * width_ + x)].isOnFire) return true;
+    if (env_ && env_->GetState(x, y).isBurning) return true;
+    return false;
+}
+
+bool World::IsTileOnFire(float px, float py) const {
+    return IsTileOnFire(ToTile(px), ToTile(py));
+}
+
 const TileData& World::GetTileData(int x, int y) const {
     static const TileData kFallback{};
     if (!IsInBounds(x, y)) return kFallback;
@@ -811,7 +838,7 @@ void World::InitStartingTerritory(int tribeId, Vector2 campPos, int tileCount) {
             const TileData& td = tiles_[(size_t)(ty * width_ + tx)];
             if (td.isCliff || td.waterType != WaterType::None ||
                 td.type == TILE_DEEP_WATER || td.type == TILE_SHALLOW_WATER || td.isRiver) continue;
-            float d = std::sqrt((float)(dx * dx + dy * dy));
+            float d = std::hypot((float)dx, (float)dy);
             float noise = (float)((tx * 13 + ty * 37) % 7) * 0.25f;
             queue.push_back({ tx, ty, d + noise });
         }

@@ -159,6 +159,9 @@ public:
     Vector2 TargetPosition() const { return targetPosition_; }
     float Hp() const               { return hp_; }
     float Ap() const               { return ap_; }
+    float Stamina() const          { return ap_; }
+    float MovementSpeedMultiplier() const { return movementSpeedMultiplier_; }
+    void SetMovementSpeedMultiplier(float m) { movementSpeedMultiplier_ = m; }
     float Hunger() const           { return hunger_; }
     float Warmth() const           { return warmth_; }
     float Tiredness() const        { return tiredness_; }
@@ -172,6 +175,23 @@ public:
     float MaxLifespan() const      { return maxLifespan_; }
     CarryType Carrying() const     { return carryType_; }
     int CarryAmount() const        { return carryAmount_; }
+
+    // --- Biologie, Fortpflanzung & Pädagogik (BLOCK 3 & PHASE 1) -------------
+    int MotherId() const           { return motherId_; }
+    int FatherId() const           { return fatherId_; }
+    void SetParents(int mId, int fId) { motherId_ = mId; fatherId_ = fId; }
+    bool IsPregnant() const        { return isPregnant_; }
+    void SetPregnant(bool p)       { isPregnant_ = p; if (!p) pregnancyTimer_ = 0.0f; }
+    float PregnancyTimer() const   { return pregnancyTimer_; }
+    void SetPregnancyTimer(float t) { pregnancyTimer_ = t; }
+    float PregnancyCooldown() const { return pregnancyCooldown_; }
+    void SetPregnancyCooldown(float cd) { pregnancyCooldown_ = cd; }
+    float teachCooldown = 0.0f; // AUFTRAG PHASE 4.1: Cooldown für TeachChild (90s)
+    float TeachCooldown() const    { return teachCooldown; }
+    void SetTeachCooldown(float cd) { teachCooldown = cd; }
+    int LessonsReceived() const    { return lessonsReceived_; }
+    void IncrementLessonsReceived() { lessonsReceived_++; }
+    void GrowUp(WorldContext& ctx);
 
     // --- Werkzeuge, Waffen, Tragehilfen & Kleidung (Meilenstein A) ------------
     ToolTier GetToolTier() const       { return toolTier_; }
@@ -276,6 +296,10 @@ private:
     void DrawFloatingEmote(Vector2 drawPos) const;
     void DrawClothingAndGear(Vector2 drawPos, bool isDark = false) const;
 
+    // --- Notfall-Flucht-KI für Ertrinken und Verbrennen (AUFTRAG PHASE 3) ---
+    void ExecuteEmergencyWaterEscape(const class World& world, float dt = 0.016f);
+    void ExecuteEmergencyFireEscape(const class World& world, float dt = 0.016f);
+
     // --- Identität & Demografie -----------------------------------------------
     int id_;
     std::string name_;
@@ -283,6 +307,13 @@ private:
     Gender gender_ = Gender::Male;
     float ageYears_ = 20.0f;
     float maxLifespan_ = 78.0f;
+    int motherId_ = -1;
+    int fatherId_ = -1;
+    bool isPregnant_ = false;
+    float pregnancyTimer_ = 0.0f;
+    float pregnancyCooldown_ = 0.0f;
+    int lessonsReceived_ = 0;
+    float movementSpeedMultiplier_ = 1.0f;
 
     // --- Position ---------------------------------------------------------------
     Vector2 position_;

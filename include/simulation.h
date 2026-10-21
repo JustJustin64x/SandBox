@@ -57,6 +57,8 @@ public:
     void CycleWeather();
     void RegenerateWorld(uint32_t seed = 0);
     const EnvironmentalSystem& Env() const { return env_; }
+    const EventLog& GetEventLog() const { return eventLog_; }
+    EventLog& GetEventLog() { return eventLog_; }
 
     int SelectedCavemanId() const { return selectedCavemanId_; }
     void DeselectCaveman() { selectedCavemanId_ = -1; }
@@ -70,6 +72,8 @@ private:
     void SpawnChildFromParents(Caveman& parentA, Caveman& parentB, Vector2 spawnPos);
     void SpawnAnimal(Vector2 worldPos);
     std::vector<Vector2> FindTribeSpawnLocations(int count);
+    std::vector<Vector2> SpawnTownCenters(int count);
+    std::vector<Vector2> GenerateTribes(int count);
     void UpdateDemographicsAndFactions(float dt);
     void CheckLeadershipChallenges(float dt);
     void CheckAndExecuteSecession(float dt);

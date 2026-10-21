@@ -54,9 +54,12 @@ bool UtilityAI::CanPerformAction(const Caveman& agent, CavemanState state, const
         case CavemanState::Building: {
             if (agent.GetRole() == Role::Child) return false;
             int bId = (targetId >= 0) ? targetId : ctx.tribe.Buildings().FindActiveConstructionSite(agent.Position());
+            if (bId < 0) {
+                bId = ctx.tribe.Buildings().FindRepairSite(agent.Position());
+            }
             if (bId < 0 || agent.IsTargetBlacklisted(bId)) return false;
             const Building* b = ctx.tribe.Buildings().Get(bId);
-            if (!b || !b->NeedsWork()) return false;
+            if (!b || (!b->NeedsWork() && !b->NeedsRepair())) return false;
             if (b->builders >= b->maxBuilders) return false;
 
             // Material-Verfügbarkeit prüfen: Bei Neubau oder Upgrade muss mindestens 1 Einheit des benötigten Materials
@@ -484,6 +487,174 @@ float UtilityAI::ScoreWarmUp(const Caveman& agent, const WorldContext& ctx, int&
     return score;
 }
 
+float UtilityAI::CalculateMateScore(const Caveman& agent, const Caveman& target, const WorldContext& ctx, std::string& outReason) {
+    if (agent.Id() == target.Id() || target.IsDead()) return 0.0f;
+
+    // Nur Erwachsene (AUFTRAG PHASE 1.3: isAdult)
+    bool isAdult = (agent.GetRole() != Role::Child && agent.AgeYears() >= 16.0f &&
+                    target.GetRole() != Role::Child && target.AgeYears() >= 16.0f);
+
+    // Schwangerschaftsprüfung (AUFTRAG PHASE 1.3: !isPregnant)
+    bool isPregnant = agent.IsPregnant() || target.IsPregnant() ||
+                      agent.PregnancyCooldown() > 0.0f || target.PregnancyCooldown() > 0.0f;
+
+    const RelationshipManager& rels = ctx.tribe.Relationships();
+    float sympathy = rels.GetAffinity(agent.Id(), target.Id());
+
+    // AUFTRAG PHASE 1.3: Senke die Bedingung für eine Paarung: if (sympathy > 40.0f && isAdult && !isPregnant)
+    if (!(sympathy > 40.0f && isAdult && !isPregnant)) {
+        return 0.0f;
+    }
+
+    // Inzest-Sperre prüfen (AUFTRAG PHASE 1.2)
+    if (!SocialActionEvaluator::CanBecomePartners(&agent, &target)) return 0.0f;
+
+    // Fremd-Partnerschaften ausschließen
+    int partnerA = rels.GetPartner(agent.Id());
+    int partnerB = rels.GetPartner(target.Id());
+    if (partnerA >= 0 && partnerA != target.Id()) return 0.0f;
+    if (partnerB >= 0 && partnerB != agent.Id()) return 0.0f;
+
+    // Distanz-Einfluss
+    float dist = Vector2Distance(agent.Position(), target.Position());
+    if (dist > 250.0f) return 0.0f;
+    float distFactor = 1.0f - (dist / 250.0f) * 0.35f;
+
+    // Basis-Score
+    float baseScore = 0.35f * distFactor;
+
+    // AUFTRAG PHASE 1.3: Skaliere den Score abhängig von der Stammespopulation:
+    // float popFactor = max(0.0f, 1.0f - (tribe->GetPopulation() / 50.0f));
+    int pop = (ctx.tribe.GetPopulation() > 0) ? ctx.tribe.GetPopulation() : ctx.population;
+    float popFactor = std::max(0.0f, 1.0f - ((float)pop / 50.0f));
+
+    // Überlebens-Notbremse: Bei akutem Hunger (>= 70%) oder Kälte (<= 25%) geht Selbsterhaltung vor
+    if (agent.Hunger() >= 70.0f || agent.Warmth() <= 25.0f) {
+        return 0.0f;
+    }
+
+    // AUFTRAG PHASE 1.3: Addiere einen statischen Boost:
+    // return baseScore + (sympathy * 0.01f) + (popFactor * 0.3f);
+    float score = baseScore + (sympathy * 0.01f) + (popFactor * 0.3f);
+    score = std::clamp(score, 0.0f, 1.45f);
+
+    outReason = TextFormat("Paarung / Fortpflanzung mit %s (Score: %.2f, PopFactor: %.2f)",
+                           target.Name().c_str(), score, popFactor);
+    return score;
+}
+
+float UtilityAI::CalculateMateScore(const Caveman& agent, const WorldContext& ctx, int& outPartnerId, std::string& outReason) {
+    if (!ctx.allCavemen) return 0.0f;
+    float bestScore = 0.0f;
+    int bestId = -1;
+    std::string bestReason = "";
+
+    for (const auto& other : *ctx.allCavemen) {
+        if (other.Id() == agent.Id() || other.IsDead()) continue;
+        if (other.ClanId() != agent.ClanId()) continue;
+
+        std::string reason;
+        float score = CalculateMateScore(agent, other, ctx, reason);
+        if (score > bestScore) {
+            bestScore = score;
+            bestId = other.Id();
+            bestReason = reason;
+        }
+    }
+    outPartnerId = bestId;
+    outReason = bestReason;
+    return bestScore;
+}
+
+float UtilityAI::CalculateSecedeScore(const Caveman* caveman, const WorldContext& ctx, std::string& outReason) {
+    if (!caveman || caveman->IsDead()) return 0.0f;
+
+    // AUFTRAG PHASE 2.2: Gesundheits-Check für Schisma / Secede
+    // Eine Abspaltung in die Wildnis ist extrem gefährlich. Eine hungernde oder erfrierende Figur darf diesen Task niemals ausführen.
+    if (caveman->Hp() < 70.0f || caveman->Hunger() > 50.0f || caveman->Warmth() < 50.0f) {
+        return 0.0f;
+    }
+
+    if (caveman->GetRole() == Role::Child || caveman->AgeYears() < 16.0f) {
+        return 0.0f;
+    }
+
+    // Nur Figuren mit niedriger Loyalität (< 25) und Ehrgeiz streben nach Abspaltung
+    if (caveman->Loyalty() >= 25.0f) {
+        return 0.0f;
+    }
+
+    // Mindestpopulation im Stamm (mind. 10 Stammesmitglieder nötig)
+    int pop = (ctx.tribe.GetPopulation() > 0) ? ctx.tribe.GetPopulation() : ctx.population;
+    if (pop < 10) {
+        return 0.0f;
+    }
+
+    float rebellion = (25.0f - caveman->Loyalty()) / 25.0f;
+    float dominance = (caveman->GetPersonality().dominance + 1.0f) * 0.5f;
+    float aggression = (caveman->GetPersonality().aggression + 1.0f) * 0.5f;
+
+    float score = std::clamp((rebellion * 0.5f + dominance * 0.35f + aggression * 0.15f) * 0.85f, 0.0f, 0.95f);
+    outReason = TextFormat("Schisma / Abspaltung vom Stamm planen (Score: %.2f)", score);
+    return score;
+}
+
+float UtilityAI::CalculateSecedeScore(const Caveman& agent, const WorldContext& ctx, std::string& outReason) {
+    return CalculateSecedeScore(&agent, ctx, outReason);
+}
+
+float UtilityAI::CalculateFormNewTribeScore(const Caveman* caveman, const WorldContext& ctx, std::string& outReason) {
+    return CalculateSecedeScore(caveman, ctx, outReason);
+}
+
+float UtilityAI::CalculateFormNewTribeScore(const Caveman& agent, const WorldContext& ctx, std::string& outReason) {
+    return CalculateSecedeScore(&agent, ctx, outReason);
+}
+
+// AUFTRAG PHASE 4.1: Cooldown für TeachChild & Lehre-Score
+float UtilityAI::CalculateTeachChildScore(const Caveman* caveman, const Caveman* target, const WorldContext& ctx, std::string& outReason) {
+    if (!caveman || !target) return 0.0f;
+    if (caveman->teachCooldown > 0.0f) return 0.0f;
+    return SocialActionEvaluator::ScoreTeachChild(*caveman, *target, ctx, outReason);
+}
+
+float UtilityAI::CalculateTeachChildScore(const Caveman& caveman, const Caveman& target, const WorldContext& ctx, std::string& outReason) {
+    return CalculateTeachChildScore(&caveman, &target, ctx, outReason);
+}
+
+float UtilityAI::CalculateTeachChildScore(const Caveman* caveman, const WorldContext& ctx, int& outChildId, std::string& outReason) {
+    outChildId = -1;
+    if (!caveman) return 0.0f;
+    if (caveman->teachCooldown > 0.0f) return 0.0f;
+    if (!ctx.allCavemen) return 0.0f;
+
+    float bestScore = 0.0f;
+    int bestChildId = -1;
+    std::string bestReason;
+
+    for (const auto& other : *ctx.allCavemen) {
+        if (other.Id() == caveman->Id() || other.IsDead()) continue;
+        if (other.ClanId() != caveman->ClanId()) continue;
+        if (other.GetRole() != Role::Child && other.AgeYears() >= 16.0f) continue;
+
+        std::string r;
+        float score = CalculateTeachChildScore(caveman, &other, ctx, r);
+        if (score > bestScore) {
+            bestScore = score;
+            bestChildId = other.Id();
+            bestReason = std::move(r);
+        }
+    }
+
+    outChildId = bestChildId;
+    outReason = std::move(bestReason);
+    return bestScore;
+}
+
+float UtilityAI::CalculateTeachChildScore(const Caveman& caveman, const WorldContext& ctx, int& outChildId, std::string& outReason) {
+    return CalculateTeachChildScore(&caveman, ctx, outChildId, outReason);
+}
+
 float UtilityAI::ScoreSocial(const Caveman& agent, const WorldContext& ctx, int& outTargetId, std::string& outReason) {
     if (!ctx.allCavemen) return 0.0f;
 
@@ -497,6 +668,23 @@ float UtilityAI::ScoreSocial(const Caveman& agent, const WorldContext& ctx, int&
         if (other.ClanId() != agent.ClanId()) continue;
 
         std::string reason;
+
+        // AUFTRAG PHASE 1.3: Fortpflanzungs-Priorität prüfen
+        float scoreMate = CalculateMateScore(agent, other, ctx, reason);
+        if (scoreMate > bestScore) {
+            bestScore = scoreMate;
+            bestTargetId = other.Id();
+            bestReason = reason;
+        }
+
+        // AUFTRAG PHASE 4.1: Lehre-Score & Cooldown prüfen
+        float scoreTeach = CalculateTeachChildScore(&agent, &other, ctx, reason);
+        if (scoreTeach > bestScore) {
+            bestScore = scoreTeach;
+            bestTargetId = other.Id();
+            bestReason = reason;
+        }
+
         float scoreSoc = SocialActionEvaluator::ScoreSocialize(agent, other, ctx, reason);
         if (scoreSoc > bestScore) {
             bestScore = scoreSoc;
@@ -701,7 +889,16 @@ float UtilityAI::ScoreBuild(const Caveman& agent, const WorldContext& ctx, int& 
     const RoleTraits& traits = GetRoleTraits(agent.GetRole());
     if (!traits.canBuild) return 0.0f;
 
+    // 1. Erst echte Baustellen / Ausbauten
     outBuildingId = ctx.tribe.Buildings().FindActiveConstructionSite(agent.Position());
+    bool isRepair = false;
+
+    // 2. Falls keine Baustelle existiert, prüfe auf dringenden Reparaturbedarf (< 50% HP, max 1 Arbeiter)
+    if (outBuildingId < 0) {
+        outBuildingId = ctx.tribe.Buildings().FindRepairSite(agent.Position());
+        isRepair = (outBuildingId >= 0);
+    }
+
     if (outBuildingId < 0 || agent.IsTargetBlacklisted(outBuildingId)) return 0.0f;
 
     if (!CanPerformAction(agent, CavemanState::Building, ctx, outBuildingId)) return 0.0f;
@@ -709,8 +906,7 @@ float UtilityAI::ScoreBuild(const Caveman& agent, const WorldContext& ctx, int& 
     const Building* b = ctx.tribe.Buildings().Get(outBuildingId);
     if (!b) return 0.0f;
 
-    bool isRepair = (b->finished && !b->underUpgrade && b->hp < b->maxHp);
-    float basePriority = isRepair ? 0.90f : 0.76f;
+    float basePriority = isRepair ? 0.85f : 0.78f;
     if (b->type == BuildingType::TownCenter) basePriority = 0.88f;
     if (ctx.tribe.NeedsMoreHuts(ctx.population) && b->type == BuildingType::Hut) basePriority = std::max(basePriority, 0.85f);
 
@@ -718,8 +914,8 @@ float UtilityAI::ScoreBuild(const Caveman& agent, const WorldContext& ctx, int& 
     float score = std::clamp(basePriority * traits.buildEfficiency * dist, 0.0f, 0.95f);
 
     outReason = isRepair
-        ? TextFormat("Repariert %s", b->DisplayName().c_str())
-        : TextFormat("Baut %s", b->DisplayName().c_str());
+        ? TextFormat("Repariert %s (%d%% HP)", b->DisplayName().c_str(), (int)(b->hp / b->maxHp * 100.0f))
+        : TextFormat("Baut %s (%d%%)", b->DisplayName().c_str(), (int)b->progress);
     return score;
 }
 
@@ -800,8 +996,8 @@ float UtilityAI::ScoreExpedition(const Caveman& agent, const WorldContext& ctx, 
         }
     }
 
-    // Passenden POI suchen (entweder fokussiert oder der nächste bereite)
-    int bestPoiId = ctx.tribe.POIs().FindBestForExpedition(agent.Position(), ctx.tribe.Stock(), targetPoiId);
+    // Passenden POI suchen (entweder fokussiert oder der nächste bereite der aktuellen Epoche)
+    int bestPoiId = ctx.tribe.POIs().FindBestForExpedition(agent.Position(), ctx.tribe.Stock(), targetPoiId, ctx.tribe.Age().CurrentEra());
     if (bestPoiId < 0 || agent.IsTargetBlacklisted(bestPoiId)) return 0.0f;
     if (!CanPerformAction(agent, CavemanState::Expedition, ctx, bestPoiId)) return 0.0f;
 

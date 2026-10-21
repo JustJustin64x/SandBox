@@ -14,6 +14,9 @@
 
 #include <algorithm>
 #include <utility>
+#include <queue>
+#include <cstring>
+#include <cmath>
 
 namespace {
 
@@ -205,6 +208,38 @@ void Caveman::SyncSocialVisuals(int clanId, Color clanColor, int socialRank, Vec
     homeCampPos_ = homeCampPos;
 }
 
+void Caveman::GrowUp(WorldContext& ctx) {
+    // Genetische Persönlichkeit bestimmt Berufung beim Heranwachsen
+    bool hunterTrait = (personality_.dominance + personality_.aggression * 0.8f) >
+                       (personality_.altruism + personality_.sociability * 0.5f);
+    role_ = hunterTrait ? Role::Hunter : Role::Gatherer;
+
+    // AUFTRAG PHASE 1.4: Namens-Korrektur beim Auswachsen
+    // Aktualisiere den Namen! Nutze std::string::replace oder finde das Wort "Kind" im String this->name.
+    // Ersetze "Kind" durch "Jäger" (wenn role == Hunter) oder "Sammlerin" / "Sammler" (wenn role == Gatherer).
+    // Z. B. muss "Kind #36" im Code sauber zu "Jäger #36" umgeschrieben werden.
+    size_t pos = name_.find("Kind");
+    if (pos != std::string::npos) {
+        if (role_ == Role::Hunter) {
+            std::string rep = (gender_ == Gender::Female) ? "Jägerin" : "Jäger";
+            name_.replace(pos, 4, rep);
+        } else {
+            std::string rep = (gender_ == Gender::Female) ? "Sammlerin" : "Sammler";
+            name_.replace(pos, 4, rep);
+        }
+    } else {
+        if (role_ == Role::Hunter) {
+            name_ = ((gender_ == Gender::Female) ? "Jägerin #" : "Jäger #") + std::to_string(id_);
+        } else {
+            name_ = ((gender_ == Gender::Female) ? "Sammlerin #" : "Sammler #") + std::to_string(id_);
+        }
+    }
+
+    TriggerEmote(SocialEmote::Crown, 4.0f);
+    ctx.log.Add(TextFormat("%s ist herangewachsen (16 J.) und wirkt nun als %s!",
+                           name_.c_str(), RoleName(role_)), RoleColor(role_));
+}
+
 // ============================================================================
 //  Haupt-Update
 // ============================================================================
@@ -215,6 +250,12 @@ void Caveman::Update(WorldContext& ctx, float dt) {
     damageFlash_  = std::max(0.0f, damageFlash_ - dt);
     blockedTimer_ = std::max(0.0f, blockedTimer_ - dt);
     taskCommitmentTimer_ = std::max(0.0f, taskCommitmentTimer_ - dt);
+    pregnancyCooldown_ = std::max(0.0f, pregnancyCooldown_ - dt);
+    if (isPregnant_) {
+        pregnancyTimer_ += dt;
+    }
+    if (teachCooldown > 0.0f) teachCooldown -= dt;
+    if (teachCooldown < 0.0f) teachCooldown = 0.0f;
     for (auto it = blacklistedNodes_.begin(); it != blacklistedNodes_.end();) {
         it->second -= dt;
         if (it->second <= 0.0f) {
@@ -236,16 +277,52 @@ void Caveman::Update(WorldContext& ctx, float dt) {
         if (emoteTimer_ <= 0.0f) activeEmote_ = SocialEmote::None;
     }
 
+    // --- Notfall-Flucht-KI für Ertrinken und Verbrennen (AUFTRAG PHASE 3: Hard Overrides) ---
+    const int curTx = World::ToTile(position_.x);
+    const int curTy = World::ToTile(position_.y);
+    const WaterType wt = ctx.world.GetWaterType(curTx, curTy);
+    const TileType tt = ctx.world.GetTile(curTx, curTy);
+    isSwimming_ = (wt != WaterType::None) || (tt == TILE_SHALLOW_WATER || tt == TILE_DEEP_WATER);
+
+    // 1. Emergency Water Escape: Ertrinken verhindern bei erschöpfter Ausdauer (AP <= 10.0f)
+    if (isSwimming_ && ap_ <= 10.0f) {
+        ExecuteEmergencyWaterEscape(ctx.world, dt);
+        // Falls im tiefen Wasser ohne AP: minimaler Ertrinkungsschaden getaktet alle 1.5s
+        if (ap_ <= 0.0f && (tt == TILE_DEEP_WATER || wt == WaterType::Saltwater)) {
+            drownDamageTimer_ += dt;
+            if (drownDamageTimer_ >= 1.5f) {
+                drownDamageTimer_ = 0.0f;
+                TakeDamage(8.0f, "Ertrinken", ctx);
+            }
+        }
+        if (hp_ <= 0.0f) Die(ctx);
+        return;
+    }
+
+    // 2. Emergency Fire Escape: Sofortige Flucht von brennenden Kacheln
+    Tile currentTile = ctx.world.GetTile(position_.x, position_.y);
+    if (currentTile.isOnFire || ctx.world.IsTileOnFire(curTx, curTy)) {
+        ExecuteEmergencyFireEscape(ctx.world, dt);
+        if (ctx.env) {
+            const TileEnvState& envSt = ctx.env->GetState(curTx, curTy);
+            if (envSt.isBurning) {
+                envDamageTimer_ += dt;
+                if (envDamageTimer_ >= 1.0f) {
+                    envDamageTimer_ = 0.0f;
+                    TakeDamage(std::max(4.0f, 10.0f * envSt.fireIntensity), "Feuer", ctx);
+                }
+            }
+        }
+        if (hp_ <= 0.0f) Die(ctx);
+        return;
+    } else if (movementSpeedMultiplier_ == 2.0f && state_ != CavemanState::Fleeing) {
+        movementSpeedMultiplier_ = 1.0f;
+    }
+
     // 0) Demografie & Lebenszyklus (Kind -> Jäger/Sammler -> Ältester -> Alterstod)
     ageYears_ += dt * cfg::kAgeRate; // ca. 1.8 Lebensjahre pro Spielminute (ausbalancierte Generationen)
     if (role_ == Role::Child && ageYears_ >= 16.0f) {
-        // Genetische Persönlichkeit bestimmt Berufung beim Heranwachsen
-        bool hunterTrait = (personality_.dominance + personality_.aggression * 0.8f) >
-                           (personality_.altruism + personality_.sociability * 0.5f);
-        role_ = hunterTrait ? Role::Hunter : Role::Gatherer;
-        TriggerEmote(SocialEmote::Crown, 4.0f);
-        ctx.log.Add(TextFormat("%s ist herangewachsen (16 J.) und wirkt nun als %s!",
-                               name_.c_str(), RoleName(role_)), RoleColor(role_));
+        GrowUp(ctx);
     } else if ((role_ == Role::Hunter || role_ == Role::Gatherer) && ageYears_ >= 56.0f) {
         role_ = Role::Elder;
         if (ctx.tribe.Hierarchy().GetRank(id_) != SocialRank::Chief) {
@@ -289,6 +366,30 @@ void Caveman::Update(WorldContext& ctx, float dt) {
         case CavemanState::Sleeping:           UpdateSleeping(ctx, dt); break;
         case CavemanState::Eating:             UpdateEating(ctx, dt); break;
         case CavemanState::Dead:               break;
+    }
+
+    // Sanfte Separation-Force (Abstoßung) gegen Figuren-Stacking im Lager (BLOCK 2.1)
+    if (ctx.allCavemen && state_ != CavemanState::Dead) {
+        for (const auto& other : *ctx.allCavemen) {
+            if (other.Id() == id_ || !other.IsAlive()) continue;
+            float dist = Vector2Distance(position_, other.Position());
+            if (dist < 8.0f) {
+                Vector2 diff = Vector2Subtract(position_, other.Position());
+                float len = Vector2Length(diff);
+                Vector2 dir;
+                if (len < 0.001f) {
+                    float angle = (float)(id_ * 45 % 360) * (PI / 180.0f);
+                    dir = { std::cos(angle), std::sin(angle) };
+                } else {
+                    dir = Vector2Scale(diff, 1.0f / len);
+                }
+                float push = (8.0f - dist) * 12.0f * dt;
+                Vector2 cand = Vector2Add(position_, Vector2Scale(dir, push));
+                if (ctx.world.IsWalkable(cand)) {
+                    position_ = cand;
+                }
+            }
+        }
     }
 
     if (hp_ <= 0.0f) Die(ctx);
@@ -390,6 +491,41 @@ void Caveman::UpdateNeeds(WorldContext& ctx, float dt) {
         float swimApDrain = (tt == TILE_DEEP_WATER) ? 14.0f : 7.0f;
         if (wt == WaterType::Saltwater) swimApDrain *= 1.5f;
         SpendAp(swimApDrain * dt);
+
+        // Wasser-Notfall-Rettung (BLOCK 3.5): Sobald AP < 25% beim Schwimmen erreicht wird,
+        // bewege die Figur per direktem Vektor-Move auf die nächstgelegene Landkachel zu!
+        if (ap_ < 25.0f) {
+            int safeX = curTx, safeY = curTy;
+            bool foundLand = false;
+            float bestDistSq = 9999.0f;
+            for (int dy = -10; dy <= 10; ++dy) {
+                for (int dx = -10; dx <= 10; ++dx) {
+                    int nx = curTx + dx;
+                    int ny = curTy + dy;
+                    if (!ctx.world.IsInBounds(nx, ny)) continue;
+                    TileType t = ctx.world.GetTile(nx, ny);
+                    WaterType w = ctx.world.GetWaterType(nx, ny);
+                    if (t != TILE_DEEP_WATER && t != TILE_SHALLOW_WATER && w == WaterType::None && ctx.world.IsWalkable(World::TileCenter(nx, ny))) {
+                        float dsq = (float)(dx * dx + dy * dy);
+                        if (dsq < bestDistSq) {
+                            bestDistSq = dsq;
+                            safeX = nx; safeY = ny;
+                            foundLand = true;
+                        }
+                    }
+                }
+            }
+            if (foundLand) {
+                Vector2 landPos = World::TileCenter(safeX, safeY);
+                Vector2 dir = Vector2Subtract(landPos, position_);
+                float len = Vector2Length(dir);
+                if (len > 0.5f) {
+                    dir = Vector2Scale(dir, 1.0f / len);
+                    float escapeSpeed = 24.0f; // Direkter Notfall-Schwimmzug Richtung Land
+                    position_ = Vector2Add(position_, Vector2Scale(dir, escapeSpeed * dt));
+                }
+            }
+        }
 
         // Ertrinken: Fällt AP im tiefen Wasser auf 0, verliert der Caveman alle 1.5s spürbar HP
         if (ap_ <= 0.0f && (tt == TILE_DEEP_WATER || wt == WaterType::Saltwater)) {
@@ -679,7 +815,7 @@ bool Caveman::EnterState(CavemanState state, ResourceType resource, int targetBu
         case CavemanState::Building: {
             targetBuilding_ = targetBuildingId;
             Building* b = ctx.tribe.Buildings().Get(targetBuilding_);
-            if (!b || !b->NeedsWork()) {
+            if (!b || (!b->NeedsWork() && !b->NeedsRepair())) {
                 BlacklistTarget(targetBuildingId, 10.0f);
                 return false;
             }
@@ -711,6 +847,13 @@ bool Caveman::EnterState(CavemanState state, ResourceType resource, int targetBu
             Vector2 dest = ctx.tribe.CampPosition();
             if (Building* b = ctx.tribe.Buildings().Get(targetBuilding_)) {
                 dest = b->position;
+            }
+            // Verteile wärmende/wartende Figuren kreisförmig auf die 8 Nachbarkacheln um das Feuer
+            float angle = (float)(id_ % 8) * (2.0f * PI / 8.0f);
+            Vector2 offset = { std::cos(angle) * (TILE_SIZE * 1.15f), std::sin(angle) * (TILE_SIZE * 1.15f) };
+            Vector2 targetPos = Vector2Add(dest, offset);
+            if (ctx.world.IsWalkable(targetPos)) {
+                dest = targetPos;
             }
             if (!SetDestination(ctx, dest)) return false;
             taskCommitmentTimer_ = 3.5f;
@@ -1033,9 +1176,11 @@ void Caveman::Die(DeathCause cause, WorldContext& ctx, const char* killerName) {
             break;
     }
 
-    // Meilenstein E: Ahnengrab nahe der Siedlung für das verstorbene Stammesmitglied anlegen
+    // Meilenstein E: Ahnengrab am äußeren Friedhofsrand des Dorfes anlegen (BLOCK 4.2)
     Vector2 graveSpot = position_;
-    ctx.tribe.FindBuildingSpotAround(ctx.world, ctx.tribe.CampPosition(), graveSpot);
+    if (!ctx.tribe.FindGraveyardSpot(ctx.world, graveSpot)) {
+        ctx.tribe.FindBuildingSpotAround(ctx.world, ctx.tribe.CampPosition(), graveSpot);
+    }
     ctx.tribe.Buildings().SpawnGrave(graveSpot, name_, ctx.tribe.Age().EraIndex(), ctx.log);
 }
 
@@ -1342,7 +1487,7 @@ void Caveman::UpdateHarvesting(WorldContext& ctx, float dt) {
 
 void Caveman::UpdateBuilding(WorldContext& ctx, float dt) {
     Building* b = ctx.tribe.Buildings().Get(targetBuilding_);
-    if (!b || !b->NeedsWork()) { FinishTask(); return; }
+    if (!b || (!b->NeedsWork() && !b->NeedsRepair())) { FinishTask(); return; }
 
     if (phase_ == TaskPhase::MovingToTarget) {
         const MoveResult r = MoveAlongPath(ctx, dt);
@@ -1582,13 +1727,16 @@ void Caveman::UpdateSocializing(WorldContext& ctx, float dt) {
 
     if (workTimer_ >= 1.4f) {
         std::string dummy;
-        float sSoc   = SocialActionEvaluator::ScoreSocialize(*this, *partner, ctx, dummy);
-        float sFlirt = SocialActionEvaluator::ScoreFlirt(*this, *partner, ctx, dummy);
-        float sFood  = SocialActionEvaluator::ScoreShareFood(*this, *partner, ctx, dummy);
-        float sDisp  = SocialActionEvaluator::ScoreDispute(*this, *partner, ctx, dummy);
+        float sMate  = SocialActionEvaluator::CalculateMateScore(*this, *partner, ctx, dummy);
         float sTeach = SocialActionEvaluator::ScoreTeachChild(*this, *partner, ctx, dummy);
+        float sFood  = SocialActionEvaluator::ScoreShareFood(*this, *partner, ctx, dummy);
+        float sFlirt = SocialActionEvaluator::ScoreFlirt(*this, *partner, ctx, dummy);
+        float sSoc   = SocialActionEvaluator::ScoreSocialize(*this, *partner, ctx, dummy);
+        float sDisp  = SocialActionEvaluator::ScoreDispute(*this, *partner, ctx, dummy);
 
-        if (sTeach >= sFood && sTeach >= sFlirt && sTeach >= sSoc && sTeach >= sDisp && sTeach > 0.05f) {
+        if (sMate >= sTeach && sMate >= sFood && sMate >= sFlirt && sMate >= sSoc && sMate >= sDisp && sMate > 0.05f) {
+            SocialActionEvaluator::ExecuteMating(*this, *partner, ctx);
+        } else if (sTeach >= sFood && sTeach >= sFlirt && sTeach >= sSoc && sTeach >= sDisp && sTeach > 0.05f) {
             SocialActionEvaluator::ExecuteTeachChild(*this, *partner, ctx);
         } else if (sFood >= sFlirt && sFood >= sSoc && sFood >= sDisp && sFood > 0.05f) {
             SocialActionEvaluator::ExecuteShareFood(*this, *partner, ctx);
@@ -1794,7 +1942,7 @@ void Caveman::UpdateSleeping(WorldContext& ctx, float dt) {
 
     const bool injured = (hp_ < 85.0f);
     const bool rested = tiredness_ <= cfg::kWakeTiredness && ap_ >= cfg::kWakeAp && (!injured || hunger_ > 60.0f);
-    if (rested || hunger_ >= cfg::kHungerCritical) FinishTask();
+    if (tiredness_ <= 5.0f || rested || hunger_ >= cfg::kHungerCritical) FinishTask();
 }
 
 void Caveman::UpdateEating(WorldContext& ctx, float dt) {
@@ -1878,6 +2026,189 @@ bool Caveman::SetDestinationDirect(const World& world, Vector2 target, bool igno
     return world.FindPath(position_, target, path_, clanId_, ignoreTerritory);
 }
 
+// ============================================================================
+//  Notfall-Flucht-KI für Ertrinken und Verbrennen (AUFTRAG PHASE 3)
+// ============================================================================
+void Caveman::ExecuteEmergencyWaterEscape(const World& world, float dt) {
+    // 1. A*-Pfad leeren und laufende Utility-Aktion hart abbrechen
+    path_.clear();
+    pathIndex_ = 0;
+    state_ = CavemanState::Fleeing;
+    phase_ = TaskPhase::MovingToTarget;
+    taskDone_ = false;
+    targetNode_ = -1;
+    targetBuilding_ = -1;
+    targetSocialPartner_ = -1;
+    targetPoi_ = -1;
+    carryingTorch_ = false;
+    stateTimer_ = 3.0f;
+
+    const int startTx = World::ToTile(position_.x);
+    const int startTy = World::ToTile(position_.y);
+
+    // 2. Greedy BFS: Sucht vom aktuellen Tile maximal 15 Kacheln weit nach dem
+    // ersten Tile mit waterType == WaterType::None UND isWalkable == true (Movement-Costs ignoriert)
+    int targetTx = -1;
+    int targetTy = -1;
+
+    // Statisches Raster für schnellen Visited-Check ohne Heap-Allokation (31x31 für Radius 15)
+    bool visited[31][31];
+    std::memset(visited, 0, sizeof(visited));
+
+    std::queue<std::pair<int, int>> q;
+    visited[15][15] = true;
+    q.push({ startTx, startTy });
+
+    const int kDx[8] = { 0, 1, 0, -1, 1, 1, -1, -1 };
+    const int kDy[8] = { 1, 0, -1, 0, 1, -1, 1, -1 };
+
+    while (!q.empty()) {
+        auto [cx, cy] = q.front();
+        q.pop();
+
+        for (int i = 0; i < 8; ++i) {
+            int nx = cx + kDx[i];
+            int ny = cy + kDy[i];
+
+            int offX = nx - startTx + 15;
+            int offY = ny - startTy + 15;
+            if (offX < 0 || offX >= 31 || offY < 0 || offY >= 31) continue;
+            if (visited[offY][offX]) continue;
+            visited[offY][offX] = true;
+
+            if (!world.IsInBounds(nx, ny)) continue;
+
+            WaterType nwt = world.GetWaterType(nx, ny);
+            TileType ntt = world.GetTile(nx, ny);
+            bool nWalkable = world.IsWalkableTile(nx, ny);
+
+            // Abbruchbedingung: Sicheres Land mit waterType == WaterType::None UND isWalkable == true
+            if (nwt == WaterType::None && ntt != TILE_SHALLOW_WATER && ntt != TILE_DEEP_WATER && nWalkable) {
+                targetTx = nx;
+                targetTy = ny;
+                break;
+            }
+
+            q.push({ nx, ny });
+        }
+        if (targetTx != -1) break;
+    }
+
+    // Fallback: Falls BFS innerhalb 15 Kacheln kein Land findet, suche nächstgelegenes begehbares Ufer
+    if (targetTx == -1) {
+        int shoreX = startTx, shoreY = startTy;
+        if (world.FindNearestWalkableTile(startTx, startTy, 30, shoreX, shoreY)) {
+            targetTx = shoreX;
+            targetTy = shoreY;
+        }
+    }
+
+    // 3. Force-Move: Zwinge die Figur, sich stur in Richtung dieses Ziel-Tiles zu bewegen, bis sie an Land ist
+    if (targetTx != -1 && targetTy != -1) {
+        Vector2 targetPos = World::TileCenter(targetTx, targetTy);
+        targetPosition_ = targetPos;
+        Vector2 dir = Vector2Subtract(targetPos, position_);
+        float dist = Vector2Length(dir);
+        if (dist > 0.5f) {
+            dir = Vector2Scale(dir, 1.0f / dist);
+            facingLeft_ = (dir.x < 0.0f);
+            isMoving_ = true;
+            const RoleTraits& t = GetRoleTraits(role_);
+            float speed = std::max(28.0f, t.moveSpeed * 0.90f);
+            float step = speed * dt;
+            if (dist <= step) {
+                position_ = targetPos;
+            } else {
+                position_ = Vector2Add(position_, Vector2Scale(dir, step));
+            }
+        } else {
+            position_ = targetPos;
+        }
+    }
+}
+
+void Caveman::ExecuteEmergencyFireEscape(const World& world, float dt) {
+    // 1. Alle Tasks abbrechen
+    path_.clear();
+    pathIndex_ = 0;
+    state_ = CavemanState::Fleeing;
+    phase_ = TaskPhase::MovingToTarget;
+    taskDone_ = false;
+    targetNode_ = -1;
+    targetBuilding_ = -1;
+    targetSocialPartner_ = -1;
+    targetPoi_ = -1;
+    carryingTorch_ = false;
+    stateTimer_ = 2.0f;
+
+    // Sprint für die Dauer der Flucht (Multiplikator 2.0f)
+    movementSpeedMultiplier_ = 2.0f;
+
+    const int curTx = World::ToTile(position_.x);
+    const int curTy = World::ToTile(position_.y);
+
+    // 2. Scanne die direkten 8 Nachbarkacheln (Radius 1 bis 3)
+    // Finde die erste Kachel mit !isOnFire && isWalkable
+    int safeTx = -1;
+    int safeTy = -1;
+
+    for (int r = 1; r <= 3 && safeTx == -1; ++r) {
+        for (int dy = -r; dy <= r && safeTx == -1; ++dy) {
+            for (int dx = -r; dx <= r; ++dx) {
+                // Ringweise Prüfung (nur Rand von Radius r)
+                if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+
+                int nx = curTx + dx;
+                int ny = curTy + dy;
+                if (!world.IsInBounds(nx, ny)) continue;
+
+                TileData td = world.GetTile(World::TileCenter(nx, ny).x, World::TileCenter(nx, ny).y);
+                if (!td.isOnFire && !world.IsTileOnFire(nx, ny) && td.isWalkable && td.type != TILE_DEEP_WATER) {
+                    safeTx = nx;
+                    safeTy = ny;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Fallback falls gesamter Nahbereich brennt: Suche weiter entferntes sicheres Kachel
+    if (safeTx == -1) {
+        int outX = curTx, outY = curTy;
+        if (world.FindNearestWalkableTile(curTx, curTy, 8, outX, outY)) {
+            if (!world.IsTileOnFire(outX, outY)) {
+                safeTx = outX;
+                safeTy = outY;
+            }
+        }
+    }
+
+    // 3. Bewege die Figur sofort dorthin mit Sprint-Multiplikator 2.0f
+    if (safeTx != -1 && safeTy != -1) {
+        Vector2 targetPos = World::TileCenter(safeTx, safeTy);
+        targetPosition_ = targetPos;
+        Vector2 dir = Vector2Subtract(targetPos, position_);
+        float dist = Vector2Length(dir);
+        if (dist > 0.5f) {
+            dir = Vector2Scale(dir, 1.0f / dist);
+            facingLeft_ = (dir.x < 0.0f);
+            isMoving_ = true;
+            const RoleTraits& t = GetRoleTraits(role_);
+            float speed = t.moveSpeed * movementSpeedMultiplier_;
+            float step = speed * dt;
+            if (dist <= step) {
+                position_ = targetPos;
+                movementSpeedMultiplier_ = 1.0f;
+            } else {
+                position_ = Vector2Add(position_, Vector2Scale(dir, step));
+            }
+        } else {
+            position_ = targetPos;
+            movementSpeedMultiplier_ = 1.0f;
+        }
+    }
+}
+
 Caveman::MoveResult Caveman::MoveAlongPath(WorldContext& ctx, float dt) {
     if (path_.empty() || pathIndex_ >= path_.size()) return MoveResult::Arrived;
 
@@ -1900,7 +2231,7 @@ Caveman::MoveResult Caveman::MoveAlongPath(WorldContext& ctx, float dt) {
         }
     }
 
-    const float speed = t.moveSpeed * envMult * roadMult * waterMult;
+    const float speed = t.moveSpeed * envMult * roadMult * waterMult * movementSpeedMultiplier_;
     float step = speed * dt;
     isMoving_ = true;
 
@@ -2129,7 +2460,8 @@ void Caveman::Draw(const SpriteSheet& sheet, bool highlighted, float visualYOffs
     if (isSwimming_) {
         tint = ColorAlphaBlend(tint, Fade(SKYBLUE, 0.35f), WHITE);
     }
-    sheet.Draw(t.spriteRow, frame, drawPos, facingLeft_, tint);
+    float charScale = (role_ == Role::Child) ? 0.65f : 1.0f; // BLOCK 4.4: Kinder 65% Skalierung
+    sheet.Draw(t.spriteRow, frame, drawPos, facingLeft_, tint, charScale);
 
     if (isSwimming_) {
         // Vordere Wasserwelle verdeckt die Beine beim Schwimmen
@@ -2189,50 +2521,90 @@ void Caveman::DrawClothingAndGear(Vector2 drawPos, bool isDark) const {
     const int cx = (int)drawPos.x;
     const int cy = (int)drawPos.y;
 
-    // A) Kleidungs-Stufe direkt am Oberkörper der Figur
+    // 0) Geschlechts- & Altersmerkmale (BLOCK 4.4)
+    bool isElder = (role_ == Role::Elder || ageYears_ >= 56.0f);
+    if (gender_ == Gender::Female) {
+        // FRAUEN: Zwingend KEIN Bart! Schmalere Silhouette, langes Haar am Rücken + Clan-Haarband
+        Color hairCol = isElder ? Color{ 220, 225, 235, 255 } : Color{ 85, 52, 28, 255 };
+        int hairX = cx + (facingLeft_ ? 3 : -3);
+        DrawLineEx({ (float)hairX, (float)(cy - 16) }, { (float)hairX, (float)(cy - 9) }, 2.0f, hairCol);
+        DrawCircle((int)hairX, cy - 12, 1.2f, clanColor_); // Haarband in Clan-Farbe
+    } else {
+        // MÄNNER: Kurzes Haar, Älteste mit sichtbarem weißem/silbergrauem Bart
+        if (isElder) {
+            Color beardCol = Color{ 220, 225, 235, 255 };
+            int beardX = cx + (facingLeft_ ? -3 : 3);
+            DrawTriangle({ (float)beardX, (float)(cy - 13) }, { (float)(beardX - 2), (float)(cy - 9) }, { (float)(beardX + 2), (float)(cy - 9) }, beardCol);
+        }
+    }
+
+    // Älteste: Silbergraues / weißes Haar am Kopf
+    if (isElder) {
+        DrawRectangle(cx - 3, cy - 18, 6, 2, Color{ 225, 230, 240, 255 });
+    }
+
+    // A) Kleidungs-Stufe direkt am Oberkörper der Figur (BLOCK 4.4)
     switch (clothingTier_) {
         case ClothingTier::None:
+            // Unbekleidet: Hautfarbener Torso mit kleinem Lendenschurz
+            DrawRectangle(cx - 2, cy - 8, 4, 4, Color{ 225, 175, 130, 240 });
+            DrawRectangle(cx - 3, cy - 4, 6, 2, Color{ 95, 60, 30, 240 });
             break;
         case ClothingTier::RawHide:
-            // Zotteliges dunkelbraunes Rohfell schräg über dem Torso
+            // Zotteliges dunkelbraunes Rohfell asymmetrisch über einer Schulter
             DrawRectangle(cx - 3, cy - 8, 6, 5, Color{ 102, 66, 38, 230 });
             DrawPixel(cx - 3, cy - 3, Color{ 85, 52, 28, 230 });
             DrawPixel(cx + 2, cy - 3, Color{ 85, 52, 28, 230 });
             break;
         case ClothingTier::SewnFurs:
-            // Helles genähtes Leder-/Pelzgewand mit hellem Kragen
-            DrawRectangle(cx - 3, cy - 8, 6, 6, Color{ 158, 114, 70, 240 });
+            // Helles genähtes Leder-/Pelzgewand mit hellem Kragen und Gürtel
+            DrawRectangle(cx - 3, cy - 8, 6, 6, Color{ 165, 120, 75, 240 });
             DrawRectangle(cx - 3, cy - 9, 6, 1, Color{ 215, 195, 165, 240 });
+            DrawRectangle(cx - 3, cy - 5, 6, 1, Color{ 80, 48, 24, 255 });
             break;
         case ClothingTier::WovenTunic:
-            // Gewebte Tunika in der Clan-Farbe mit Ledergürtel
-            DrawRectangle(cx - 3, cy - 8, 6, 6, Fade(clanColor_, 0.90f));
-            DrawRectangle(cx - 3, cy - 5, 6, 1, Color{ 95, 60, 30, 245 });
+            // Gewebte Tunika + Schulterumhang in der leuchtenden Farbe des Clans!
+            DrawRectangle(cx - 3, cy - 8, 6, 6, Fade(clanColor_, 0.95f));
+            DrawRectangle(cx - 4, cy - 9, 8, 2, clanColor_); // Schulterumhang
+            DrawRectangle(cx - 3, cy - 5, 6, 1, Color{ 90, 55, 25, 255 }); // Gürtel
             break;
         case ClothingTier::Armor:
-            // Metallischer Brustpanzer + kleiner Helmreif
-            DrawRectangle(cx - 4, cy - 8, 8, 6, Color{ 182, 192, 208, 245 });
+            // Metallischer Brustpanzer + Schulterplatten + kleiner Helm
+            DrawRectangle(cx - 4, cy - 8, 8, 6, Color{ 185, 195, 212, 250 });
             DrawRectangleLines(cx - 4, cy - 8, 8, 6, Color{ 110, 120, 138, 255 });
-            DrawRectangle(cx - 3, cy - 15, 6, 2, Color{ 195, 205, 220, 245 });
+            DrawRectangle(cx - 5, cy - 9, 2, 3, Color{ 210, 220, 235, 255 }); // Schulterplatte links
+            DrawRectangle(cx + 3, cy - 9, 2, 3, Color{ 210, 220, 235, 255 }); // Schulterplatte rechts
+            DrawRectangle(cx - 3, cy - 16, 6, 3, Color{ 205, 215, 230, 255 }); // Metallhelm
+            DrawLineEx({ (float)(cx - 3), (float)(cy - 14) }, { (float)(cx + 3), (float)(cy - 14) }, 1.2f, GOLD);
             break;
     }
 
-    // B) Tragekorb auf dem Rücken (und sichtbares Ladegut beim Rückweg)
-    if (containerTier_ != ContainerTier::None && state_ != CavemanState::Expedition) {
-        int backX = cx + (facingLeft_ ? 3 : -6);
-        int backY = cy - 8;
-        DrawRectangle(backX, backY, 3, 5, Color{ 195, 152, 82, 245 });
-        DrawRectangleLines(backX, backY, 3, 5, Color{ 130, 95, 45, 245 });
-        if (carryAmount_ > 0) {
-            Color loadCol = (carryType_ == CarryType::Food)  ? Color{ 220, 55, 65, 255 } :
-                            (carryType_ == CarryType::Wood)  ? Color{ 135, 85, 40, 255 } :
-                            (carryType_ == CarryType::Stone) ? Color{ 165, 165, 175, 255 } : GOLD;
-            DrawCircle(backX + 1, backY - 1, 1.8f, loadCol);
-        }
+    // B) Tragekorb auf dem Rücken (und sichtbares Ladegut beim Transport)
+    if (carryAmount_ > 0 && state_ != CavemanState::Expedition) {
+        int backX = cx + (facingLeft_ ? 3 : -7);
+        int backY = cy - 9;
+        DrawRectangle(backX, backY, 4, 6, Color{ 185, 140, 75, 255 });
+        DrawRectangleLines(backX, backY, 4, 6, Color{ 120, 85, 40, 255 });
+        Color loadCol = (carryType_ == CarryType::Food)   ? Color{ 220, 55, 65, 255 } :
+                        (carryType_ == CarryType::Wood)   ? Color{ 135, 85, 40, 255 } :
+                        (carryType_ == CarryType::Stone)  ? Color{ 165, 165, 175, 255 } :
+                        (carryType_ == CarryType::Planks) ? Color{ 225, 185, 115, 255 } : GOLD;
+        DrawCircle(backX + 2, backY - 1, 2.0f, loadCol);
     }
 
-    // C) Gehaltenes Werkzeug oder Jagdwaffe in der vorderen Hand
-    if (carryingTorch_ && isDark) return; // Fackel wird separat gezeichnet
+    // C) Gehaltenes Werkzeug oder Jagdwaffe in der Hand (Fackel nur bei Nacht!)
+    if (carryingTorch_ && isDark) return;
+
+    // Älteste mit Holzstab, wenn unbewaffnet
+    if (isElder && weaponTier_ <= WeaponTier::WoodClub && toolTier_ == ToolTier::BareHands) {
+        float staffX = drawPos.x + (facingLeft_ ? -6.0f : 6.0f);
+        DrawLineEx({ staffX, (float)(cy - 16) }, { staffX, (float)cy }, 1.5f, Color{ 140, 95, 48, 255 });
+        DrawCircle((int)staffX, cy - 16, 1.8f, Color{ 160, 110, 58, 255 });
+        return;
+    }
+
+    // Kinder tragen keine Waffen/Werkzeuge (BLOCK 4.4)
+    if (role_ == Role::Child) return;
 
     float handX = drawPos.x + (facingLeft_ ? -6.5f : 6.5f);
     float handY = drawPos.y - 5.0f;
@@ -2248,16 +2620,26 @@ void Caveman::DrawClothingAndGear(Vector2 drawPos, bool isDark) const {
                 DrawLineEx({ handX - dir * 1.0f, handY + 3.0f }, { handX + dir * 4.0f, handY - 6.0f }, 1.3f, Color{ 145, 95, 48, 255 });
                 DrawCircleV({ handX + dir * 4.5f, handY - 6.8f }, 1.6f, Color{ 185, 195, 210, 255 });
                 break;
-            case WeaponTier::CompositeBow:
-                // Geschwungener Bogen + Sehne
-                DrawLineEx({ handX, handY - 5.0f }, { handX + dir * 2.5f, handY }, 1.4f, Color{ 165, 110, 50, 255 });
-                DrawLineEx({ handX + dir * 2.5f, handY }, { handX, handY + 5.0f }, 1.4f, Color{ 165, 110, 50, 255 });
-                DrawLineEx({ handX, handY - 5.0f }, { handX, handY + 5.0f }, 1.0f, Fade(RAYWHITE, 0.75f));
+            case WeaponTier::CompositeBow: {
+                // Geschwungener brauner Bogen + Köcher auf dem Rücken
+                DrawLineEx({ handX, handY - 6.0f }, { handX + dir * 2.8f, handY }, 1.6f, Color{ 150, 95, 45, 255 });
+                DrawLineEx({ handX + dir * 2.8f, handY }, { handX, handY + 6.0f }, 1.6f, Color{ 150, 95, 45, 255 });
+                DrawLineEx({ handX, handY - 6.0f }, { handX, handY + 6.0f }, 1.0f, Fade(RAYWHITE, 0.8f));
+                int quiverX = cx + (facingLeft_ ? 3 : -5);
+                DrawRectangle(quiverX, cy - 14, 3, 8, Color{ 120, 80, 42, 255 });
+                DrawLineEx({ (float)quiverX, (float)(cy - 16) }, { (float)(quiverX + 2), (float)(cy - 13) }, 1.0f, RAYWHITE);
                 break;
-            case WeaponTier::MetalBlade:
-                DrawLineEx({ handX, handY + 1.0f }, { handX + dir * 4.0f, handY - 6.0f }, 1.8f, Color{ 210, 225, 245, 255 });
-                DrawPixel((int)handX, (int)handY + 1, GOLD);
+            }
+            case WeaponTier::MetalBlade: {
+                // Eisenschwert mit Parierstange + Rundschild mit Clan-Farbe
+                DrawLineEx({ handX, handY + 2.0f }, { handX + dir * 6.0f, handY - 8.0f }, 2.0f, Color{ 220, 230, 245, 255 });
+                DrawLineEx({ handX + dir * 1.5f, handY - 1.0f }, { handX + dir * 1.5f, handY + 4.0f }, 1.5f, GOLD);
+                float shieldX = drawPos.x + (facingLeft_ ? 5.0f : -5.0f);
+                DrawCircleV({ shieldX, (float)(cy - 6) }, 3.5f, clanColor_);
+                DrawCircleLines((int)shieldX, cy - 6, 3.5f, Color{ 210, 215, 225, 255 });
+                DrawCircleV({ shieldX, (float)(cy - 6) }, 1.0f, GOLD);
                 break;
+            }
         }
         return;
     }
@@ -2267,20 +2649,25 @@ void Caveman::DrawClothingAndGear(Vector2 drawPos, bool isDark) const {
         case ToolTier::BareHands:
             break;
         case ToolTier::FlintHandaxe:
-            DrawCircleV({ handX, handY - 1.0f }, 2.0f, Color{ 160, 168, 180, 255 });
+            DrawTriangle({ handX, handY - 3.0f }, { handX - 2.0f, handY + 1.0f }, { handX + 2.0f, handY + 1.0f }, Color{ 150, 155, 165, 255 });
             break;
         case ToolTier::HaftedAxe:
             DrawLineEx({ handX, handY + 2.0f }, { handX, handY - 5.0f }, 1.3f, Color{ 140, 90, 45, 255 });
             DrawRectangle((int)(handX + (facingLeft_ ? -3.0f : 0.0f)), (int)(handY - 5.0f), 3, 2, Color{ 170, 175, 185, 255 });
             break;
         case ToolTier::BronzeTool:
-            DrawLineEx({ handX, handY + 2.0f }, { handX, handY - 5.0f }, 1.3f, Color{ 140, 90, 45, 255 });
-            DrawRectangle((int)(handX + (facingLeft_ ? -3.0f : 0.0f)), (int)(handY - 5.0f), 3, 2, Color{ 225, 155, 70, 255 });
+            DrawLineEx({ handX, handY + 2.0f }, { handX, handY - 5.0f }, 1.4f, Color{ 140, 90, 45, 255 });
+            DrawRectangle((int)(handX + (facingLeft_ ? -4.0f : 0.0f)), (int)(handY - 6.0f), 4, 3, Color{ 235, 175, 75, 255 });
+            DrawCircle((int)(handX + (facingLeft_ ? -2.0f : 2.0f)), (int)(handY - 5.0f), 1.0f, GOLD);
             break;
-        case ToolTier::IronTool:
-            DrawLineEx({ handX, handY + 2.0f }, { handX, handY - 5.0f }, 1.3f, Color{ 140, 90, 45, 255 });
-            DrawRectangle((int)(handX + (facingLeft_ ? -3.0f : 0.0f)), (int)(handY - 5.0f), 3, 2, Color{ 205, 220, 240, 255 });
+        case ToolTier::IronTool: {
+            DrawLineEx({ handX, handY + 2.0f }, { handX + dir * 5.0f, handY - 7.0f }, 1.8f, Color{ 215, 225, 240, 255 });
+            DrawLineEx({ handX + dir * 1.5f, handY - 1.0f }, { handX + dir * 1.5f, handY + 3.0f }, 1.4f, GOLD);
+            float shieldX = drawPos.x + (facingLeft_ ? 4.5f : -4.5f);
+            DrawCircleV({ shieldX, (float)(cy - 6) }, 3.2f, clanColor_);
+            DrawCircleLines((int)shieldX, cy - 6, 3.2f, RAYWHITE);
             break;
+        }
     }
 }
 
@@ -2370,7 +2757,7 @@ void Caveman::DrawFloatingEmote(Vector2 drawPos) const {
         DrawLineEx({ ex - 3.5f, ey }, { ex + 3.5f, ey }, 1.3f, SKYBLUE);
         DrawLineEx({ ex, ey - 3.5f }, { ex, ey + 3.5f }, 1.3f, SKYBLUE);
         DrawCircleV({ ex, ey }, 1.5f, WHITE);
-    } else if (tiredness_ >= 82.0f || state_ == CavemanState::Sleeping) {
+    } else if (state_ == CavemanState::Sleeping && tiredness_ > 0.0f) {
         FontManager::DrawTextCenteredShadow("zZ", ex, ey - 6.0f, 11.0f, Color{ 200, 185, 255, 255 });
     }
 }

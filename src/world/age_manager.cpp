@@ -60,25 +60,30 @@ float AgeManager::RequiredEraDuration(Era era) const {
     return 9999.0f;
 }
 
+void AgeManager::SetEra(Era era, EventLog* log) {
+    (void)log;
+    currentEra_ = era;
+}
+
+void AgeManager::SetEpoch(HistoricalEpoch epoch, EventLog* log) {
+    (void)log;
+    currentEpoch_ = epoch;
+}
+
 void AgeManager::UpdateHistoricalEpoch(const Stockpile& stock, const BuildingManager& buildings,
                                        const SkillTree& skillTree, int population, EventLog& log) {
     int totalFood = stock.food + stock.cookedFood;
     int huts = buildings.GetBuildingCount(BuildingType::Hut, true);
-    int farms = buildings.GetBuildingCount(BuildingType::FarmPlot, true);
-    int pantries = buildings.GetBuildingCount(BuildingType::Pantry, true);
-    int benches = buildings.GetBuildingCount(BuildingType::CraftBench, true);
-    int kilns = buildings.GetBuildingCount(BuildingType::Kiln, true);
     int tcTier = buildings.GetMaxTier(BuildingType::TownCenter);
     int hutTier = buildings.GetMaxTier(BuildingType::Hut);
     int kilnTier = buildings.GetMaxTier(BuildingType::Kiln);
     int monTier = buildings.GetMaxTier(BuildingType::Monument);
 
     // Kausaler Übergang 1 -> 2: Jäger & Sammler -> Späte Steinzeit / Neolithikum
-    // Voraussetzung: Beherrschung des Feuers & Faustkeils, erste feste Hütte, stabile Nahrungsreserve
+    // Voraussetzung: Ackerbau & Steinklingen abgeschlossen (Strikte Technologie-Kausalität)
     if (currentEpoch_ == HistoricalEpoch::HunterGatherer) {
-        bool hasBasicTech = skillTree.IsUnlocked("fire") && skillTree.IsUnlocked("flint") &&
-                            (skillTree.IsUnlocked("agriculture") || skillTree.IsUnlocked("tailoring"));
-        if (hasBasicTech && huts >= 1 && totalFood >= 4 && population >= 3) {
+        bool hasNeolithicTech = skillTree.IsResearched("Ackerbau & Saatgut") && skillTree.IsResearched("Steinklingen & Keile");
+        if (hasNeolithicTech && huts >= 1 && totalFood >= 4 && population >= 3) {
             currentEpoch_ = HistoricalEpoch::Neolithic;
             log.Add("====================================================", { 180, 235, 130, 255 });
             log.Add("EPOCHE II ERREICHT: Späte Steinzeit / Neolithikum!", { 180, 235, 130, 255 });
@@ -87,11 +92,9 @@ void AgeManager::UpdateHistoricalEpoch(const Stockpile& stock, const BuildingMan
         }
     }
     // Kausaler Übergang 2 -> 3: Neolithikum -> Kupferzeit
-    // Voraussetzung: Ackerbau oder Vorratskammer etabliert + Höhlenkunde oder Kupferabbau entdeckt
+    // Voraussetzung: Echte Kupfergewinnung (Chalkolithikum), keine Steinzeit-Technologien mehr vermischt!
     else if (currentEpoch_ == HistoricalEpoch::Neolithic) {
-        bool hasMetallurgySeed = skillTree.IsUnlocked("cave") || skillTree.IsUnlocked("copper");
-        bool hasSurplusInfra = (farms >= 1 || pantries >= 1 || huts >= 2);
-        if (hasMetallurgySeed && hasSurplusInfra && totalFood >= 6 && population >= 3) {
+        if (skillTree.IsResearched("Kupfergewinnung") && totalFood >= 6 && population >= 3) {
             currentEpoch_ = HistoricalEpoch::CopperAge;
             log.Add("====================================================", { 235, 155, 90, 255 });
             log.Add("EPOCHE III ERREICHT: Die Kupferzeit (Chalkolithikum)!", { 235, 155, 90, 255 });
@@ -100,8 +103,9 @@ void AgeManager::UpdateHistoricalEpoch(const Stockpile& stock, const BuildingMan
         }
     }
     // Kausaler Übergang 3 -> 4: Kupferzeit -> Bronzezeit
-    else if (currentEpoch_ == HistoricalEpoch::CopperAge) {
-        if (currentEra_ >= Era::BronzeAge && skillTree.IsUnlocked("bronze") && benches >= 1) {
+    // Voraussetzung: Strikt Bronzelegierung & Guss
+    else if (currentEpoch_ == HistoricalEpoch::CopperAge || currentEpoch_ < HistoricalEpoch::BronzeAge) {
+        if (skillTree.IsResearched("Bronzelegierung & Guss")) {
             currentEpoch_ = HistoricalEpoch::BronzeAge;
             log.Add("====================================================", GOLD);
             log.Add("EPOCHE IV ERREICHT: Hochblüte der Bronzezeit!", GOLD);
@@ -110,8 +114,9 @@ void AgeManager::UpdateHistoricalEpoch(const Stockpile& stock, const BuildingMan
         }
     }
     // Kausaler Übergang 4 -> 5: Bronzezeit -> Eisenzeit
+    // Voraussetzung: Strikt Rennofen & Eisen
     else if (currentEpoch_ == HistoricalEpoch::BronzeAge) {
-        if (currentEra_ >= Era::IronAge || (skillTree.IsUnlocked("bloomery") && kilns >= 1)) {
+        if (skillTree.IsResearched("Rennofen & Eisen")) {
             currentEpoch_ = HistoricalEpoch::IronAge;
             log.Add("====================================================", SKYBLUE);
             log.Add("EPOCHE V ERREICHT: Die Eisenzeit!", SKYBLUE);
@@ -121,7 +126,7 @@ void AgeManager::UpdateHistoricalEpoch(const Stockpile& stock, const BuildingMan
     }
     // Kausaler Übergang 5 -> 6: Eisenzeit -> Antike Hochkultur
     else if (currentEpoch_ == HistoricalEpoch::IronAge) {
-        if (skillTree.IsUnlocked("masonry") && skillTree.IsUnlocked("defense") &&
+        if (skillTree.IsResearched("Steinmetzkunst") && skillTree.IsResearched("Wehrbau & Wachturm") &&
             tcTier >= 3 && hutTier >= 3 && (kilnTier >= 2 || monTier >= 2) && population >= 5) {
             currentEpoch_ = HistoricalEpoch::Antiquity;
             log.Add("====================================================", { 220, 175, 255, 255 });
@@ -134,8 +139,15 @@ void AgeManager::UpdateHistoricalEpoch(const Stockpile& stock, const BuildingMan
 
 void AgeManager::Update(const Stockpile& stock, const BuildingManager& buildings, const SkillTree& skillTree,
                         int population, float dt, EventLog& log) {
-    // 1. Epochen-Laufzeit dokumentieren (reine Statistik, kein künstlicher Blocker mehr!)
+    // 1. Epochen-Laufzeit dokumentieren
     eraElapsedTime_ += dt;
+
+    // Automatischer Übergang der Ära synchron zu den gemeisterten Meilensteinen (Hard Gating)
+    if (currentEra_ == Era::StoneAge && skillTree.AreEraMilestonesCompleted(Era::StoneAge)) {
+        AdvanceEra(const_cast<Stockpile&>(stock), log);
+    } else if (currentEra_ == Era::BronzeAge && skillTree.IsResearched("Rennofen & Eisen")) {
+        AdvanceEra(const_cast<Stockpile&>(stock), log);
+    }
 
     // 2. Kausale Prüfung der 14 historischen Epochen
     UpdateHistoricalEpoch(stock, buildings, skillTree, population, log);
@@ -161,55 +173,22 @@ void AgeManager::Update(const Stockpile& stock, const BuildingManager& buildings
 
 bool AgeManager::CanAdvance(const Stockpile& stock, const BuildingManager& buildings, const SkillTree& skillTree,
                             int population, std::string* outRequirement) const {
-    int totalFood = stock.food + stock.cookedFood;
+    (void)stock; (void)buildings; (void)population;
     if (currentEra_ == Era::StoneAge) {
-        // Kausale Kriterien für den Übergang in die Bronze-/Werkzeugzeit (KEINE künstliche Stoppuhr!):
-        // 1. Alle Steinzeit-Meilensteine erforscht (Ackerbau & Saatgut, Höhlenkunde, Megalith)
-        // 2. Sesshaftigkeit: Stammesplatz + mindestens 2 feste Hütten errichtet
-        // 3. Nahrungssicherheit: Mindestens 6 Nahrungseinheiten auf Vorrat
-        // 4. Demografie: Mindestens 3 lebende Stammesmitglieder
         bool milestonesMet = skillTree.AreEraMilestonesCompleted(Era::StoneAge);
-        bool hasTC = buildings.GetBuildingCount(BuildingType::TownCenter, true) > 0;
-        int huts = buildings.GetBuildingCount(BuildingType::Hut, true);
-        bool hasShelters = hasTC && (huts >= 2);
-        bool hasFood = (totalFood >= 6);
-        bool hasPop = (population >= 3);
-
         int doneMilestones = skillTree.GetMilestonesCompleted(Era::StoneAge);
         int totalMilestones = skillTree.GetMilestonesTotal(Era::StoneAge);
-
         if (outRequirement) {
-            *outRequirement = TextFormat("Meilensteine: %d/%d | Hütten: %d/2 | Vorrat: %d/6 | Pop: %d/3",
-                                         doneMilestones, totalMilestones,
-                                         huts, totalFood, population);
+            *outRequirement = TextFormat("Steinzeit-Meilensteine: %d/%d (Ackerbau, Höhle, Megalith)", doneMilestones, totalMilestones);
         }
-        return milestonesMet && hasShelters && hasFood && hasPop;
+        return milestonesMet;
     }
     else if (currentEra_ == Era::BronzeAge) {
-        // Kausale Kriterien für den Übergang in die Eisenzeit (KEINE künstliche Stoppuhr!):
-        // 1. Alle Bronzezeit-Meilensteine erforscht (Bronzelegierung & Zimmererkunst)
-        // 2. Infrastruktur & Arbeitsteilung: Langhaus (TC Stufe 2), Werkbank & Acker/Vorratskammer/Ofen
-        // 3. Nahrungsüberschuss: Mindestens 8 Nahrungseinheiten
-        // 4. Demografie: Mindestens 4 Einwohner
-        bool milestonesMet = skillTree.AreEraMilestonesCompleted(Era::BronzeAge);
-        bool tcTier2 = buildings.GetMaxTier(BuildingType::TownCenter) >= 2;
-        bool hasBench = buildings.GetBuildingCount(BuildingType::CraftBench, true) > 0;
-        bool hasProduction = (buildings.GetBuildingCount(BuildingType::FarmPlot, true) > 0 ||
-                              buildings.GetBuildingCount(BuildingType::Pantry, true) > 0 ||
-                              buildings.GetBuildingCount(BuildingType::Kiln, true) > 0);
-        bool hasFood = (totalFood >= 8);
-        bool hasPop = (population >= 4);
-
-        int doneMilestones = skillTree.GetMilestonesCompleted(Era::BronzeAge);
-        int totalMilestones = skillTree.GetMilestonesTotal(Era::BronzeAge);
-
+        bool ironMet = skillTree.IsResearched("Rennofen & Eisen");
         if (outRequirement) {
-            *outRequirement = TextFormat("Meilensteine: %d/%d | Langhaus & Werkbank: %s | Vorrat: %d/8 | Pop: %d/4",
-                                         doneMilestones, totalMilestones,
-                                         (tcTier2 && hasBench && hasProduction) ? "Bereit" : "Im Aufbau",
-                                         totalFood, population);
+            *outRequirement = TextFormat("Eisenverhüttung: %s (Rennofen & Eisen)", ironMet ? "Bereit für Eisenzeit" : "In Erforschung");
         }
-        return milestonesMet && tcTier2 && hasBench && hasProduction && hasFood && hasPop;
+        return ironMet;
     }
 
     if (outRequirement) *outRequirement = TextFormat("Aktuelle Epoche: %s", HistoricalEpochName(currentEpoch_));

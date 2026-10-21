@@ -274,6 +274,27 @@ int BuildingManager::GetBuildingCount(BuildingType type, bool finishedOnly) cons
     return count;
 }
 
+bool BuildingManager::HasBuilding(BuildingType type, bool finishedOnly) const {
+    for (const auto& b : buildings_) {
+        if (b.type == type && (!finishedOnly || b.finished)) return true;
+    }
+    return false;
+}
+
+Building* BuildingManager::GetBuilding(BuildingType type, bool finishedOnly) {
+    for (auto& b : buildings_) {
+        if (b.type == type && (!finishedOnly || b.finished)) return &b;
+    }
+    return nullptr;
+}
+
+const Building* BuildingManager::GetBuilding(BuildingType type, bool finishedOnly) const {
+    for (const auto& b : buildings_) {
+        if (b.type == type && (!finishedOnly || b.finished)) return &b;
+    }
+    return nullptr;
+}
+
 int BuildingManager::GetMaxTier(BuildingType type) const {
     int maxTier = 0;
     for (const auto& b : buildings_) {
@@ -416,11 +437,11 @@ bool BuildingManager::StartUpgrade(int buildingId, Stockpile& stock, const AgeMa
 
 bool BuildingManager::AddBuildProgress(int buildingId, float amount, Stockpile& stock, EventLog& log) {
     Building* b = Get(buildingId);
-    if (!b || !b->NeedsWork()) return false;
+    if (!b || (!b->NeedsWork() && !b->NeedsRepair())) return false;
 
-    // Reparatur eines beschädigten fertigen Gebäudes
+    // Reparatur eines beschädigten fertigen Gebäudes (BLOCK 2.1: 2-3s bis 100% repariert)
     if (b->finished && !b->underUpgrade && b->hp < b->maxHp) {
-        b->hp = std::min(b->maxHp, b->hp + amount * 1.6f);
+        b->hp = std::min(b->maxHp, b->hp + amount * 8.0f);
         if (b->hp >= b->maxHp) {
             b->hp = b->maxHp;
             log.Add(TextFormat("%s wurde vollständig instand gesetzt!", b->DisplayName().c_str()), { 120, 230, 120, 255 });
@@ -494,6 +515,25 @@ int BuildingManager::FindActiveConstructionSite(Vector2 from) const {
 
         float dist = Vector2Distance(from, b.position);
         // Stadtzentrum-Upgrades haben Priorität
+        if (b.type == BuildingType::TownCenter) dist *= 0.5f;
+
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestId = b.id;
+        }
+    }
+    return bestId;
+}
+
+int BuildingManager::FindRepairSite(Vector2 from) const {
+    int bestId = -1;
+    float bestDist = 1e9f;
+
+    for (const auto& b : buildings_) {
+        // Reparatur nur wenn condition < 50% und maximal 1 Figur im Clan repariert
+        if (!b.NeedsRepair()) continue;
+
+        float dist = Vector2Distance(from, b.position);
         if (b.type == BuildingType::TownCenter) dist *= 0.5f;
 
         if (dist < bestDist) {
@@ -646,32 +686,30 @@ void BuildingManager::DrawBuilding(const Building& b, float simTime, Vector2 mou
         }
     }
 
-    // Fortschrittsbalken bei Bau/Upgrade oder Schadensbalken bei Reparaturbedarf (kompakt 24x4)
-    if (b.NeedsWork()) {
-        float barY = y - 26.0f;
-        bool isRepair = (b.finished && !b.underUpgrade && b.hp < b.maxHp);
-        float pct = isRepair ? std::clamp(b.hp / b.maxHp, 0.0f, 1.0f) : (b.progress / 100.0f);
-        DrawRectangleRec({ x - 12.0f, barY, 24.0f, 4.0f }, Fade(BLACK, 0.85f));
-        DrawRectangleRec({ x - 12.0f, barY, 24.0f * pct, 4.0f }, isRepair ? ORANGE : (b.underUpgrade ? SKYBLUE : GOLD));
-        DrawRectangleLines((int)(x - 12.0f), (int)barY, 24, 4, Fade(WHITE, 0.8f));
+    // Aktive Baustellen: Zeichne ausschließlich einen minimalen, textlosen Fortschrittsbalken (16x3 Pixel, dezent grün/grau) direkt über dem Gerüst (BLOCK 4.1)
+    if (!b.finished || b.underUpgrade) {
+        float barY = y - 24.0f;
+        float pct = std::clamp(b.progress / 100.0f, 0.0f, 1.0f);
+        DrawRectangleRec({ x - 8.0f, barY, 16.0f, 3.0f }, Fade(Color{ 35, 40, 45, 255 }, 0.85f));
+        DrawRectangleRec({ x - 8.0f, barY, 16.0f * pct, 3.0f }, Color{ 70, 215, 110, 255 });
     }
 
-    // Text-Name und Status nur bei Hover im 2.5-Kacheln-Radius anzeigen (fontSize 11)
-    if (Vector2Distance(mouseWorld, b.position) <= 2.5f * TILE_SIZE) {
-        float labelY = y - 42.0f;
+    // Hover-Only-Regel (BLOCK 4.1): Name und Zustand AUSSCHLIESSLICH bei direktem Mouse-Hover (<= 1.2 Kacheln)
+    if (Vector2Distance(mouseWorld, b.position) <= 1.2f * TILE_SIZE) {
+        float labelY = y - 36.0f;
         std::string label;
         if (!b.finished) {
             label = TextFormat("%s (%d%%)", BuildingTypeName(b.type, b.tier), (int)b.progress);
         } else if (b.underUpgrade) {
             label = TextFormat("%s (Ausbau: %d%%)", BuildingTypeName(b.type, b.tier), (int)b.progress);
         } else if (b.hp < b.maxHp) {
-            label = TextFormat("%s (%d%%)", BuildingTypeName(b.type, b.tier), (int)((b.hp / b.maxHp) * 100.0f));
+            label = TextFormat("%s (%d%% HP)", BuildingTypeName(b.type, b.tier), (int)((b.hp / b.maxHp) * 100.0f));
         } else {
             label = BuildingTypeName(b.type, b.tier);
         }
         int tw = MeasureText(label.c_str(), 11);
-        DrawRectangle((int)(x - tw * 0.5f - 4), (int)(labelY - 2), tw + 8, 16, Fade(BLACK, 0.85f));
-        DrawRectangleLines((int)(x - tw * 0.5f - 4), (int)(labelY - 2), tw + 8, 16, Fade(GOLD, 0.75f));
+        DrawRectangle((int)(x - tw * 0.5f - 4), (int)(labelY - 2), tw + 8, 16, Fade(BLACK, 0.88f));
+        DrawRectangleLines((int)(x - tw * 0.5f - 4), (int)(labelY - 2), tw + 8, 16, Fade(GOLD, 0.80f));
         DrawText(label.c_str(), (int)(x - tw * 0.5f), (int)labelY, 11, RAYWHITE);
     }
 }
@@ -739,28 +777,52 @@ void BuildingManager::DrawTownCenter(const Building& b, float simTime) const {
             // Brutzelndes Fleischstück am Spieß
             DrawCircleV({ x, y - 8.0f }, 2.0f, Color{ 185, 85, 50, 255 });
         } else {
-            // Erloschenes Feuer: Kalte graue Asche
+            // Erloschenes Feuer: Kalte graue Asche (BLOCK 4.1: kein Dauer-Text 'KALT')
             DrawCircleV({ x, y - 1.0f }, 3.2f, Color{ 90, 92, 96, 235 });
-            FontManager::DrawTextCenteredShadow("KALT", x, y - 22.0f, 10.0f, SKYBLUE);
         }
     } else if (b.tier == 2) {
-        // Stufe 2: Langhaus (Holzbalken + Giebeldach + Herdfeuer)
-        DrawRectangle((int)(x - 16), (int)(y - 14), 32, 14, { 120, 75, 40, 255 });
-        DrawTriangle({ x, y - 24.0f }, { x - 19.0f, y - 14.0f }, { x + 19.0f, y - 14.0f }, { 90, 55, 30, 255 });
-        DrawRectangle((int)(x - 4), (int)(y - 7), 8, 7, b.HasActiveFire() ? Color{ 210, 120, 45, 255 } : Color{ 40, 25, 15, 255 });
+        // Stufe 2: Langhaus (Holzbalken + Giebeldach + Herdfeuer + Clan-Banner, BLOCK 4.3)
+        DrawRectangle((int)(x - 18), (int)(y - 15), 36, 15, { 115, 72, 38, 255 });
+        DrawTriangle({ x, y - 26.0f }, { x - 21.0f, y - 15.0f }, { x + 21.0f, y - 15.0f }, { 85, 52, 28, 255 });
+        // Holzbalken-Fachwerk
+        DrawLineEx({ x - 18.0f, y - 15.0f }, { x + 18.0f, y - 15.0f }, 1.5f, Color{ 65, 40, 20, 255 });
+        DrawLineEx({ x - 9.0f, y }, { x - 9.0f, y - 15.0f }, 1.2f, Color{ 65, 40, 20, 255 });
+        DrawLineEx({ x + 9.0f, y }, { x + 9.0f, y - 15.0f }, 1.2f, Color{ 65, 40, 20, 255 });
+        // Eingang & Herdfeuer davor
+        DrawRectangle((int)(x - 4), (int)(y - 8), 8, 8, b.HasActiveFire() ? Color{ 210, 120, 45, 255 } : Color{ 40, 25, 15, 255 });
+        // 2 Pfosten mit Wimpeln an den Seiten
+        DrawLineEx({ x - 22.0f, y + 2.0f }, { x - 22.0f, y - 16.0f }, 1.4f, Color{ 140, 95, 48, 255 });
+        DrawTriangle({ x - 22.0f, y - 16.0f }, { x - 16.0f, y - 13.0f }, { x - 22.0f, y - 10.0f }, GOLD);
+        DrawLineEx({ x + 22.0f, y + 2.0f }, { x + 22.0f, y - 16.0f }, 1.4f, Color{ 140, 95, 48, 255 });
+        DrawTriangle({ x + 22.0f, y - 16.0f }, { x + 28.0f, y - 13.0f }, { x + 22.0f, y - 10.0f }, GOLD);
         if (b.HasActiveFire()) {
             DrawCircleV({ x, y - 14.0f }, b.warmthRadius * 0.35f, Fade(ORANGE, 0.07f));
-            float smokeY = y - 26.0f - std::fmod(simTime * 8.0f, 10.0f);
-            DrawCircleV({ x + 6.0f, smokeY }, 2.2f, Fade(LIGHTGRAY, 0.45f));
+            float smokeY = y - 28.0f - std::fmod(simTime * 8.0f, 10.0f);
+            DrawCircleV({ x + 6.0f, smokeY }, 2.4f, Fade(LIGHTGRAY, 0.45f));
         }
     } else {
-        // Stufe 3: Rathaus (Steinmauerwerk + Ziegeldach)
-        DrawRectangle((int)(x - 18), (int)(y - 18), 36, 18, { 140, 140, 145, 255 });
-        DrawRectangleLines((int)(x - 18), (int)(y - 18), 36, 18, { 90, 90, 95, 255 });
-        DrawTriangle({ x, y - 28.0f }, { x - 22.0f, y - 18.0f }, { x + 22.0f, y - 18.0f }, { 170, 70, 50, 255 });
-        DrawRectangle((int)(x - 5), (int)(y - 9), 10, 9, { 60, 40, 25, 255 });
+        // Stufe 3: Eisenzeit-Rathaus / Festung (Stein- und Fachwerk, gepflasterter Vorplatz & Flaggen, BLOCK 4.3)
+        // Gepflasterter Vorplatz
+        DrawRectangle((int)(x - 22), (int)(y - 3), 44, 7, Color{ 110, 112, 118, 230 });
+        DrawRectangleLines((int)(x - 22), (int)(y - 3), 44, 7, Color{ 75, 78, 82, 230 });
+        // Massiver Steinbau
+        DrawRectangle((int)(x - 20), (int)(y - 20), 40, 20, { 145, 145, 150, 255 });
+        DrawRectangleLines((int)(x - 20), (int)(y - 20), 40, 20, { 85, 85, 90, 255 });
+        // Ziegeldach mit First
+        DrawTriangle({ x, y - 32.0f }, { x - 24.0f, y - 20.0f }, { x + 24.0f, y - 20.0f }, { 175, 65, 45, 255 });
+        DrawRectangle((int)(x - 6), (int)(y - 10), 12, 10, { 55, 38, 22, 255 });
+        // Fenster links und rechts
+        DrawRectangle((int)(x - 15), (int)(y - 15), 5, 5, { 245, 220, 130, 255 });
+        DrawRectangle((int)(x + 10), (int)(y - 15), 5, 5, { 245, 220, 130, 255 });
+        // 2 große Flaggenmasten
+        DrawLineEx({ x - 24.0f, y + 2.0f }, { x - 24.0f, y - 24.0f }, 1.6f, Color{ 160, 165, 175, 255 });
+        DrawRectangle((int)(x - 24), (int)(y - 24), 7, 5, SKYBLUE);
+        DrawLineEx({ x + 24.0f, y + 2.0f }, { x + 24.0f, y - 24.0f }, 1.6f, Color{ 160, 165, 175, 255 });
+        DrawRectangle((int)(x + 24), (int)(y - 24), 7, 5, SKYBLUE);
         if (b.HasActiveFire()) {
-            DrawCircleV({ x, y - 16.0f }, b.warmthRadius * 0.35f, Fade(GOLD, 0.08f));
+            DrawCircleV({ x, y - 18.0f }, b.warmthRadius * 0.35f, Fade(GOLD, 0.08f));
+            float smokeY = y - 34.0f - std::fmod(simTime * 8.0f, 10.0f);
+            DrawCircleV({ x + 12.0f, smokeY }, 2.8f, Fade(LIGHTGRAY, 0.50f));
         }
     }
 
@@ -798,10 +860,6 @@ void BuildingManager::DrawHut(const Building& b, float simTime) const {
         float smokeOffset = std::fmod(simTime * 7.0f + (float)b.id * 2.0f, 9.0f);
         DrawCircleV({ x + 7.0f, y - 24.0f - smokeOffset }, 1.8f, Fade(LIGHTGRAY, 0.45f));
     }
-
-    if (b.occupants > 0 && b.finished) {
-        FontManager::DrawTextShadow("zZ", x + 5.0f, y - 22.0f, 11.0f, RAYWHITE);
-    }
 }
 
 void BuildingManager::DrawPantry(const Building& b) const {
@@ -826,8 +884,14 @@ void BuildingManager::DrawCraftBench(const Building& b) const {
     DrawRectangle((int)(x - 10), (int)(y - 9), 20, 5, { 140, 95, 50, 255 });
     DrawRectangle((int)(x - 8), (int)(y - 4), 3, 5, { 90, 60, 30, 255 });
     DrawRectangle((int)(x + 5), (int)(y - 4), 3, 5, { 90, 60, 30, 255 });
-    DrawRectangle((int)(x - 5), (int)(y - 12), 7, 3, { 105, 110, 120, 255 });
+    DrawRectangle((int)(x - 5), (int)(y - 12), 7, 3, { 105, 110, 120, 255 }); // Amboss
     DrawRectangle((int)(x + 3), (int)(y - 11), 5, 2, { 185, 135, 85, 255 });
+
+    // Sägebock links & gestapelte Holzbretter rechts (BLOCK 4.3)
+    DrawLineEx({ x - 14.0f, y - 1.0f }, { x - 11.0f, y - 7.0f }, 1.3f, Color{ 110, 75, 40, 255 });
+    DrawLineEx({ x - 11.0f, y - 1.0f }, { x - 14.0f, y - 7.0f }, 1.3f, Color{ 110, 75, 40, 255 });
+    DrawRectangle((int)(x + 11), (int)(y - 5), 8, 2, Color{ 210, 160, 95, 255 });
+    DrawRectangle((int)(x + 12), (int)(y - 8), 7, 2, Color{ 190, 140, 80, 255 });
 }
 
 void BuildingManager::DrawWatchtower(const Building& b, float simTime) const {
@@ -905,10 +969,7 @@ void BuildingManager::DrawFarmPlot(const Building& b, float simTime) const {
             }
         }
     }
-
-    if (b.IsHarvestReady()) {
-        FontManager::DrawTextCenteredShadow("ERNTE", x, y - 24.0f, 11.0f, GOLD);
-    }
+    // BLOCK 4.3: Erntereife ist rein visuell durch goldgelbes Getreide erkennbar (kein störender "ERNTE"-Text)
 }
 
 void BuildingManager::DrawAnimalPen(const Building& b, float simTime) const {
@@ -934,10 +995,7 @@ void BuildingManager::DrawAnimalPen(const Building& b, float simTime) const {
         DrawEllipse((int)ax, (int)ay, 3, 2, Color{ 242, 238, 225, 255 });
         DrawCircleV({ ax + 2.5f, ay - 1.0f }, 1.3f, Color{ 85, 75, 68, 255 });
     }
-
-    if (b.IsHarvestReady()) {
-        FontManager::DrawTextCenteredShadow("WOLLE", x, y - 25.0f, 11.0f, RAYWHITE);
-    }
+    // BLOCK 4.3: Kein störender Text wie "WOLLE" über dem Gehege
 }
 
 void BuildingManager::DrawMonument(const Building& b, float simTime) const {

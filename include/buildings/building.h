@@ -58,6 +58,8 @@ struct Building {
     float warmthEfficiency = 1.0f;// Isolationswert
     float viewRange = 60.0f;      // Wachturm-Sichtbereich
 
+    bool IsConstructed() const { return finished; }
+
     bool HasActiveFire() const {
         if (!finished) return false;
         if (type == BuildingType::TownCenter || type == BuildingType::Kiln) {
@@ -89,7 +91,12 @@ struct Building {
 
     bool NeedsWork() const {
         if (type == BuildingType::Grave) return false;
-        return !finished || underUpgrade || (finished && hp < maxHp - 8.0f);
+        return !finished || underUpgrade;
+    }
+
+    bool NeedsRepair() const {
+        if (!finished || underUpgrade || type == BuildingType::Grave) return false;
+        return hp < (maxHp * 0.50f) && builders == 0;
     }
 
     std::string DisplayName() const;
@@ -118,6 +125,7 @@ public:
     // Abfragen für KI
     int FindBestShelter(Vector2 from) const;
     int FindActiveConstructionSite(Vector2 from) const;
+    int FindRepairSite(Vector2 from) const;
     int FindCraftBench(Vector2 from) const;
     int FindFireNeedingFuel(Vector2 from) const;
     int FindFarmOrPenNeedingWork(Vector2 from) const;
@@ -131,6 +139,9 @@ public:
     const std::vector<Building>& All() const { return buildings_; }
 
     int GetBuildingCount(BuildingType type, bool finishedOnly = true) const;
+    bool HasBuilding(BuildingType type, bool finishedOnly = true) const;
+    Building* GetBuilding(BuildingType type, bool finishedOnly = true);
+    const Building* GetBuilding(BuildingType type, bool finishedOnly = true) const;
     int GetMaxTier(BuildingType type) const;
     int TotalSleepingCapacity() const;
     bool HasUnfinishedBuilding() const;

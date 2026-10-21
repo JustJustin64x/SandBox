@@ -72,7 +72,11 @@ struct TileData {
     // Territorien-System (Phase 1)
     int ownerTribeId = -1;         // -1 = neutrales/unbeanspruchtes Land, >= 0 = Clan-ID
     float claimStrength = 0.0f;    // 0.0f bis 100.0f Kontrollstärke
+    bool isOnFire = false;         // AUFTRAG PHASE 3.2: Kachel brennt / Brandgefahr
+    bool isWalkable = true;        // AUFTRAG PHASE 3.1 & 3.2: Begehbarkeitsstatus
 };
+
+using Tile = TileData;
 
 class EnvironmentalSystem;
 
@@ -93,6 +97,9 @@ public:
     // --- Kachelzugriff & 3D-Hydrologie (Phase 1) ------------------------------
     bool IsInBounds(int x, int y) const;
     TileType GetTile(int x, int y) const;
+    TileData GetTile(float px, float py) const;
+    bool IsTileOnFire(int x, int y) const;
+    bool IsTileOnFire(float px, float py) const;
     void SetTile(int x, int y, TileType type);
     static const TileProperty& GetProperty(TileType type);
 

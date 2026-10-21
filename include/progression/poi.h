@@ -73,8 +73,8 @@ public:
 
     const std::vector<PointOfInterest>& All() const { return pois_; }
 
-    // Sucht einen geeigneten POI für eine Expedition
-    int FindBestForExpedition(Vector2 from, const Stockpile& stock, int targetPoiId = -1) const;
+    // Sucht einen geeigneten POI für eine Expedition (unter Beachtung der Epochen-Schranke)
+    int FindBestForExpedition(Vector2 from, const Stockpile& stock, int targetPoiId = -1, Era currentEra = Era::IronAge) const;
 
     // Prüft, ob benötigte Ausrüstung vorhanden ist
     bool HasRequiredGear(const PointOfInterest& poi, const Stockpile& stock) const;

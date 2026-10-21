@@ -2,10 +2,21 @@
 #include "config.h"
 #include "font_manager.h"
 #include "ai/brain_genome.h"
+#include "social/social_actions.h"
+#include "ai/utility_ai.h"
 
 #include <algorithm>
 #include <cmath>
 #include <random>
+
+namespace sf {
+    struct Vector2i {
+        int x = 0;
+        int y = 0;
+        Vector2i() = default;
+        Vector2i(int px, int py) : x(px), y(py) {}
+    };
+}
 
 namespace {
 
@@ -179,6 +190,17 @@ void Simulation::SpawnChildFromParents(Caveman& parentA, Caveman& parentB, Vecto
     if (!trPtr) trPtr = tribes_[0].get();
     Tribe& tr = *trPtr;
 
+    // Biologische Abstammung & Schwangerschafts-Cooldown (BLOCK 3.1)
+    int motherId = (parentA.GetGender() == Gender::Female) ? parentA.Id() : parentB.Id();
+    int fatherId = (parentA.GetGender() == Gender::Male) ? parentA.Id() : parentB.Id();
+    cavemen_.back().SetParents(motherId, fatherId);
+
+    if (parentA.GetGender() == Gender::Female) {
+        parentA.SetPregnancyCooldown(210.0f); // 180 bis 240 Sekunden
+    } else {
+        parentB.SetPregnancyCooldown(210.0f);
+    }
+
     tr.Hierarchy().AssignToClan(id, (int)Role::Child, parentClanId);
 
     Family* fam = tr.Hierarchy().GetOrCreateFamily(parentA.Id(), parentB.Id());
@@ -313,33 +335,73 @@ std::vector<Vector2> Simulation::FindTribeSpawnLocations(int count) {
         return a.score > b.score;
     });
 
+    // AUFTRAG PHASE 2.1: Distanz-Check beim World-Spawning mit claimedSpawns und std::hypot
+    std::vector<sf::Vector2i> claimedSpawns;
+
     for (const auto& cand : candidates) {
-        Vector2 pos = World::TileCenter(cand.tx, cand.ty);
-        bool tooClose = false;
-        for (const auto& loc : locations) {
-            float distTiles = Vector2Distance(pos, loc) / (float)TILE_SIZE;
-            if (distTiles < 42.0f) {
-                tooClose = true;
+        bool isValid = true;
+        for (const auto& spawn : claimedSpawns) {
+            float distance = std::hypot((float)(cand.tx - spawn.x), (float)(cand.ty - spawn.y));
+            if (distance < 45.0f) {
+                isValid = false;
                 break;
             }
         }
-        if (!tooClose) {
-            locations.push_back(pos);
+
+        if (isValid) {
+            claimedSpawns.push_back({ cand.tx, cand.ty });
+            locations.push_back(World::TileCenter(cand.tx, cand.ty));
             if ((int)locations.size() == count) break;
         }
     }
 
-    // Fallback falls unwegsames Terrain
+    // AUFTRAG PHASE 2.1: Fallback mit maximal 100 Random-Versuchen
+    // Wenn nach 100 Random-Versuchen kein Platz mit 45 Kacheln Abstand gefunden wird, brich ab (break)
+    // und spawne lieber einen Stamm weniger auf der Karte, als eine Kollision zuzulassen!
     while ((int)locations.size() < count) {
-        Vector2 fallback;
-        if (world_.FindRandomWalkablePosition(world_.CenterPosition(), 300.0f, fallback, 60)) {
-            locations.push_back(fallback);
-        } else {
-            locations.push_back(world_.CenterPosition());
+        int attempts = 0;
+        bool foundValid = false;
+
+        while (!foundValid && attempts < 100) {
+            attempts++;
+            int rx = GetRandomValue(15, w - 16);
+            int ry = GetRandomValue(15, h - 16);
+
+            const TileData& td = world_.GetTileData(rx, ry);
+            if (td.waterType != WaterType::None || td.isCliff || td.type == TILE_MOUNTAIN) {
+                continue;
+            }
+
+            bool isValid = true;
+            for (const auto& spawn : claimedSpawns) {
+                float distance = std::hypot((float)(rx - spawn.x), (float)(ry - spawn.y));
+                if (distance < 45.0f) {
+                    isValid = false;
+                    break;
+                }
+            }
+
+            if (isValid) {
+                claimedSpawns.push_back({ rx, ry });
+                locations.push_back(World::TileCenter(rx, ry));
+                foundValid = true;
+            }
+        }
+
+        if (!foundValid) {
+            break; // Lieber einen Stamm weniger spawnen als eine Kollision zuzulassen!
         }
     }
 
     return locations;
+}
+
+std::vector<Vector2> Simulation::SpawnTownCenters(int count) {
+    return FindTribeSpawnLocations(count);
+}
+
+std::vector<Vector2> Simulation::GenerateTribes(int count) {
+    return FindTribeSpawnLocations(count);
 }
 
 void Simulation::RegenerateWorld(uint32_t seed) {
@@ -511,14 +573,17 @@ void Simulation::HandleInput() {
     float tabY = 9.0f;
     float tabW = 102.0f;
     float tabH = 26.0f;
+    int clickTabIdx = 0;
     for (size_t i = 0; i < tribes_.size(); ++i) {
-        Rectangle tabR = { tabX + (float)i * 108.0f, tabY, tabW, tabH };
+        if (tribes_[i]->IsDisbanded()) continue;
+        Rectangle tabR = { tabX + (float)clickTabIdx * 108.0f, tabY, tabW, tabH };
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouseScreen, tabR)) {
             activeTribeIndex_ = (int)i;
             camera_.SetTarget(tribes_[i]->CampPosition());
             CancelActiveInput();
             return;
         }
+        clickTabIdx++;
     }
 
     // Wenn der Skilltree geöffnet ist, Eingaben exklusiv an das Overlay leiten
@@ -660,7 +725,7 @@ void Simulation::UpdateDemographicsAndFactions(float dt) {
 
     // 2. Stufe 3: Demografie, Fortpflanzung & genetische Vererbung pro Stamm
     demographicTimer_ += dt;
-    if (demographicTimer_ >= 16.0f) {
+    if (demographicTimer_ >= 4.0f) {
         demographicTimer_ = 0.0f;
 
         for (auto& tr : tribes_) {
@@ -668,14 +733,56 @@ void Simulation::UpdateDemographicsAndFactions(float dt) {
             for (const auto& c : cavemen_) {
                 if (!c.IsDead() && c.ClanId() == tr->Id()) tribePop++;
             }
+            tr->SetPopulation(tribePop);
 
             int totalFood = tr->Stock().food + tr->Stock().cookedFood;
             bool hasShelter = tr->Buildings().GetBuildingCount(BuildingType::Hut, true) > 0;
-            // Frühe Stämme oder kleine Populationen (< 8) dürfen sich auch am Stammes-Lagerfeuer fortpflanzen
-            if (tribePop < 24 && totalFood >= 5 && (hasShelter || tribePop < 8)) {
+
+            // 2a. Prüfe schwangere Mütter auf Geburt (AUFTRAG PHASE 1.1)
+            for (size_t i = 0; i < cavemen_.size(); ++i) {
+                if (cavemen_[i].IsDead() || cavemen_[i].ClanId() != tr->Id()) continue;
+                if (!cavemen_[i].IsPregnant()) continue;
+
+                if (cavemen_[i].PregnancyTimer() >= 12.0f) {
+                    int partnerId = tr->Relationships().GetPartner(cavemen_[i].Id());
+                    int partnerIdx = -1;
+                    if (partnerId >= 0) {
+                        for (size_t j = 0; j < cavemen_.size(); ++j) {
+                            if (!cavemen_[j].IsDead() && cavemen_[j].Id() == partnerId) {
+                                partnerIdx = (int)j;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Strikte Biologie (AUFTRAG PHASE 1.1): Zwingend 1x Mann und 1x Frau
+                    if (partnerIdx >= 0 && cavemen_[i].GetGender() != cavemen_[partnerIdx].GetGender()) {
+                        Vector2 spawnPos = cavemen_[i].Position();
+                        int hutId = tr->Buildings().FindBestShelter(spawnPos);
+                        if (hutId >= 0) {
+                            if (const Building* hut = tr->Buildings().Get(hutId)) {
+                                world_.FindRandomWalkablePosition(hut->position, 16.0f, spawnPos, 15);
+                            }
+                        } else {
+                            world_.FindRandomWalkablePosition(tr->CampPosition(), 20.0f, spawnPos, 15);
+                        }
+
+                        if (tr->Stock().food >= 2) tr->Stock().food -= 2;
+                        else if (tr->Stock().cookedFood >= 2) tr->Stock().cookedFood -= 2;
+
+                        cavemen_[i].SetPregnant(false);
+                        SpawnChildFromParents(cavemen_[i], cavemen_[partnerIdx], spawnPos);
+                    } else {
+                        cavemen_[i].SetPregnant(false);
+                    }
+                }
+            }
+
+            // 2b. Ambient-Fortpflanzung für bestehende Paare (Populations-Kapazität bis 50)
+            if (tribePop < 50 && totalFood >= 4 && (hasShelter || tribePop < 10)) {
                 for (size_t i = 0; i < cavemen_.size(); ++i) {
                     if (cavemen_[i].IsDead() || cavemen_[i].ClanId() != tr->Id() || cavemen_[i].GetRole() == Role::Child) continue;
-                    if (cavemen_[i].Hunger() > 65.0f) continue;
+                    if (cavemen_[i].Hunger() > 65.0f || cavemen_[i].IsPregnant()) continue;
 
                     int partnerId = tr->Relationships().GetPartner(cavemen_[i].Id());
                     if (partnerId < 0 || partnerId < cavemen_[i].Id()) continue;
@@ -689,24 +796,25 @@ void Simulation::UpdateDemographicsAndFactions(float dt) {
                     }
                     if (partnerIdx < 0) continue;
 
-                    Vector2 spawnPos = cavemen_[i].Position();
-                    int hutId = tr->Buildings().FindBestShelter(spawnPos);
-                    if (hutId >= 0) {
-                        if (const Building* hut = tr->Buildings().Get(hutId)) {
-                            world_.FindRandomWalkablePosition(hut->position, 16.0f, spawnPos, 15);
-                        }
-                    } else {
-                        world_.FindRandomWalkablePosition(tr->CampPosition(), 20.0f, spawnPos, 15);
-                    }
+                    // Strikte Biologie (AUFTRAG PHASE 1.1): Zwingend 1x Mann und 1x Frau
+                    if (cavemen_[i].GetGender() == cavemen_[partnerIdx].GetGender()) continue;
 
-                    if (tr->Stock().food >= 3) {
-                        tr->Stock().food -= 3;
-                    } else {
-                        int rem = 3 - tr->Stock().food;
-                        tr->Stock().food = 0;
-                        tr->Stock().cookedFood = std::max(0, tr->Stock().cookedFood - rem);
-                    }
-                    SpawnChildFromParents(cavemen_[i], cavemen_[partnerIdx], spawnPos);
+                    // Schwangerschafts-Cooldown (180-240s) für die Mutter prüfen
+                    Caveman& mother = (cavemen_[i].GetGender() == Gender::Female) ? cavemen_[i] : cavemen_[partnerIdx];
+                    Caveman& father = (cavemen_[i].GetGender() == Gender::Male) ? cavemen_[i] : cavemen_[partnerIdx];
+                    if (mother.PregnancyCooldown() > 0.0f || mother.IsPregnant()) continue;
+
+                    // Inzest-Sperre prüfen (AUFTRAG PHASE 1.2)
+                    if (!SocialActionEvaluator::CanBecomePartners(&mother, &father)) continue;
+
+                    // Familien-Limit (maximal 3-4 Kinder pro Paar)
+                    Family* fam = tr->Hierarchy().GetOrCreateFamily(cavemen_[i].Id(), cavemen_[partnerIdx].Id());
+                    if (fam && fam->childrenIds.size() >= 4) continue;
+
+                    mother.SetPregnant(true);
+                    mother.SetPregnancyCooldown(210.0f);
+                    mother.TriggerEmote(SocialEmote::Heart, 3.5f);
+                    father.TriggerEmote(SocialEmote::Heart, 3.5f);
                     break;
                 }
             }
@@ -810,16 +918,24 @@ void Simulation::CheckAndExecuteSecession(float dt) {
         // Parent Clan muss mind. 12 Mitglieder haben, damit er nicht ausstirbt & Sezession realistisch ist
         if (memberCount < 12 || !rebel) continue;
 
+        // Suizid-Schisma verhindern (AUFTRAG PHASE 2.2): Anführer muss gesund und satt sein
+        float timeOfDay = std::fmod(totalSimTime_, cfg::kDayCycleDuration) / cfg::kDayCycleDuration;
+        WorldContext ctx{ world_, parentTribe, resources_, eventLog_, memberCount, timeOfDay, &cavemen_, &tribes_, &env_ };
+        std::string secedeReason;
+        if (UtilityAI::CalculateSecedeScore(rebel, ctx, secedeReason) <= 0.0f) continue;
+
         // Finde passenden Siedlungsplatz im unbesiedelten, neutralen Land
         Vector2 targetCampPos;
         if (!FindSecessionSettlementSpot(targetCampPos)) continue;
 
-        // Gefährten rekrutieren: Partner und enge Freunde
+        // Gefährten rekrutieren: Partner und enge Freunde (müssen ebenfalls lebensfähig sein)
         std::vector<Caveman*> followers;
         int partnerId = parentTribe.Relationships().GetPartner(rebel->Id());
 
         for (auto& c : cavemen_) {
             if (c.IsDead() || c.ClanId() != parentTribe.Id() || c.Id() == rebel->Id() || c.Id() == chiefId) continue;
+            if (c.Hp() < 70.0f || c.Warmth() < 50.0f || c.Hunger() > 50.0f) continue;
+
             if (c.Id() == partnerId) {
                 followers.push_back(&c);
             } else if (followers.size() < 2) {
@@ -830,6 +946,9 @@ void Simulation::CheckAndExecuteSecession(float dt) {
                 }
             }
         }
+
+        // Nicht allein in die Wildnis abspalten
+        if (followers.empty()) continue;
 
         int newClanId = 1;
         for (const auto& tr : tribes_) {
@@ -1199,24 +1318,26 @@ void Simulation::DrawUI() const {
     // Logo / Titel
     FontManager::DrawTextShadow("PRIMITIVE", 16.0f, 12.0f, 20.0f, RAYWHITE);
 
-    // Zivilisations-Badges zum schnellen Durchschalten der Stämme
+    // Zivilisations-Badges zum schnellen Durchschalten der lebenden Stämme (BLOCK 3.5)
     float tabX = 135.0f;
     float tabY = 9.0f;
     float tabW = 102.0f;
     float tabH = 26.0f;
+    int renderedTabIdx = 0;
     for (size_t i = 0; i < tribes_.size(); ++i) {
+        if (tribes_[i]->IsDisbanded()) continue; // Tote Stämme aus der Top-Leiste entfernen
         bool isActive = ((int)i == activeTribeIndex_);
-        bool isDisbanded = tribes_[i]->IsDisbanded();
-        Rectangle tabR = { tabX + (float)i * 108.0f, tabY, tabW, tabH };
+        Rectangle tabR = { tabX + (float)renderedTabIdx * 108.0f, tabY, tabW, tabH };
         bool hov = CheckCollisionPointRec(mouseScreen, tabR);
-        Color baseCol = isDisbanded ? DARKGRAY : tribes_[i]->FactionColor();
+        Color baseCol = tribes_[i]->FactionColor();
 
         DrawRectangleRounded(tabR, 0.35f, 4, isActive ? Fade(baseCol, 0.85f) : (hov ? Fade(baseCol, 0.45f) : Fade(BLACK, 0.70f)));
-        DrawRectangleRoundedLinesEx(tabR, 0.35f, 4, isActive ? 1.8f : 1.0f, isActive ? GOLD : (isDisbanded ? GRAY : baseCol));
+        DrawRectangleRoundedLinesEx(tabR, 0.35f, 4, isActive ? 1.8f : 1.0f, isActive ? GOLD : baseCol);
 
-        std::string tabLabel = TextFormat("[%d] %s", (int)i + 1, tribes_[i]->Name().c_str());
+        std::string tabLabel = TextFormat("[%d] %s", (int)renderedTabIdx + 1, tribes_[i]->Name().c_str());
         FontManager::DrawTextCenteredShadow(tabLabel.c_str(),
-                                            tabR.x + tabR.width * 0.5f, tabR.y + 5.0f, 13.0f, isDisbanded ? LIGHTGRAY : RAYWHITE);
+                                            tabR.x + tabR.width * 0.5f, tabR.y + 5.0f, 13.0f, RAYWHITE);
+        renderedTabIdx++;
     }
 
     // Vorräte & Ressourcen in der Mitte (sauber platziert ab x = 485)

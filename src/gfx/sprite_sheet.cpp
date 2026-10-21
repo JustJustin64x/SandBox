@@ -325,14 +325,14 @@ Rectangle SpriteSheet::GetSourceRect(int row, int column, bool flipX) const {
     return src;
 }
 
-void SpriteSheet::Draw(int row, int column, Vector2 feetPos, bool facingLeft, Color tint) const {
+void SpriteSheet::Draw(int row, int column, Vector2 feetPos, bool facingLeft, Color tint, float customScale) const {
     if (!loaded_) return;
     const bool flip = config_.spritesFaceRight ? facingLeft : !facingLeft;
     const Rectangle src = GetSourceRect(row, column, flip);
     if (src.height <= 0.0f) return;
 
-    const float w = std::fabs(src.width) * scale_;
-    const float h = src.height * scale_;
+    const float w = std::fabs(src.width) * scale_ * customScale;
+    const float h = src.height * scale_ * customScale;
     const Rectangle dest = { feetPos.x, feetPos.y, w, h };
     const Vector2 origin = { w * 0.5f, h };   // Ankerpunkt: unten mittig (Füße)
     DrawTexturePro(texture_, src, dest, origin, 0.0f, tint);

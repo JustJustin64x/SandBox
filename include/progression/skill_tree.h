@@ -47,6 +47,22 @@ public:
     void Init();
     void Update(POIManager& pois, EventLog& log);
 
+    // AUFTRAG PHASE 5: Kausales Hard-Gating für Epochen-Fortschritt
+    bool isNeolithic = false;
+    bool isBronzeAge = false;
+    bool isIronAge = false;
+
+    bool IsResearched(const std::string& nameOrKey) const;
+    bool CanResearch(const TechNode& node) const { return CanResearchNode(node); }
+    bool CanResearch(int id) const;
+    bool CanResearch(const std::string& key) const;
+
+    void TriggerNeolithic(AgeManager* age = nullptr, EventLog* log = nullptr);
+    void TriggerBronzeAge(AgeManager* age = nullptr, EventLog* log = nullptr);
+    void TriggerIronAge(AgeManager* age = nullptr, EventLog* log = nullptr);
+
+    void CheckEpochAdvancement(AgeManager* age = nullptr, EventLog* log = nullptr);
+
     bool IsUnlocked(const std::string& key) const;
     bool IsUnlocked(int id) const;
 
@@ -61,6 +77,9 @@ public:
     bool AreEraMilestonesCompleted(Era era) const;
     int GetMilestonesTotal(Era era) const;
     int GetMilestonesCompleted(Era era) const;
+
+    // Strikte Epochen-Schranke (Hard Gating): Prüft, ob eine Technologie nach Epochenregeln erforschbar ist
+    bool CanResearchNode(const TechNode& node) const;
 
     TechNode* GetNode(int id);
     const TechNode* GetNode(int id) const;

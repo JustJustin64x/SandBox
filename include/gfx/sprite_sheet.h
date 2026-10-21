@@ -82,7 +82,7 @@ public:
     int WalkColumn(int row, int index) const;
 
     // Zeichnet einen Frame mit den Füßen auf feetPos.
-    void Draw(int row, int column, Vector2 feetPos, bool facingLeft, Color tint) const;
+    void Draw(int row, int column, Vector2 feetPos, bool facingLeft, Color tint, float customScale = 1.0f) const;
 
     // --- Hilfsfunktionen ohne GPU (auch für Tests nutzbar) ---------------------
     static void ApplyColorKey(Image& image, const SpriteSheetConfig& config);

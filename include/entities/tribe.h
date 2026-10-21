@@ -62,6 +62,9 @@ public:
 
     void InitWorld(const World& world);
 
+    int GetPopulation() const { return population_; }
+    void SetPopulation(int pop) { population_ = pop; }
+
     Stockpile& Stock() { return stock_; }
     const Stockpile& Stock() const { return stock_; }
 
@@ -70,6 +73,8 @@ public:
 
     AgeManager& Age() { return age_; }
     const AgeManager& Age() const { return age_; }
+    Era CurrentEra() const { return age_.CurrentEra(); }
+    HistoricalEpoch CurrentEpoch() const { return age_.CurrentEpoch(); }
 
     RelationshipManager& Relationships() { return relationships_; }
     const RelationshipManager& Relationships() const { return relationships_; }
@@ -106,6 +111,15 @@ public:
     const SettlementPlan& CurrentPlan() const { return planner_; }
     ResourceCost GetPlannedResourceDeficit() const;
     bool FindBuildingSpotAround(const World& world, Vector2 center, Vector2& out) const;
+    bool FindGraveyardSpot(const World& world, Vector2& out) const;
+
+    // AUFTRAG PHASE 4.2 & 4.3: Vorratskammer-Verderb & Rate-Limiting
+    bool HasBuilding(BuildingType type, bool finishedOnly = true) const;
+    Building* GetBuilding(BuildingType type, bool finishedOnly = true);
+    const Building* GetBuilding(BuildingType type, bool finishedOnly = true) const;
+    void UpdateDecay(float dt, EventLog& log);
+    void UpdateDecay(float dt);
+    float lastDecayLogTimer = 0.0f;
 
     // --- Territorien-Visualisierung, Kapazität & Expansion (Phase 1, 2 & 3) --
     struct ExpansionTarget {
@@ -144,6 +158,7 @@ private:
 
     Vector2 campPos_;
     int id_ = 1;
+    int population_ = 0;
     std::string name_ = "Ur-Sippe";
     Color factionColor_ = Color{ 215, 50, 50, 255 };
     bool isFormed_ = false;

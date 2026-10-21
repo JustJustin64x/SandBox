@@ -116,6 +116,11 @@ void SkillTreeUI::Draw(const Tribe& tribe, Vector2 mousePos) const {
 
     // 4. Kausale Epochen-Statusleiste (14-Stufen-Modell & Meilensteine)
     Era curEra = tribe.Age().CurrentEra();
+    if (curEra == Era::BronzeAge && tribe.Skills().IsResearched("Rennofen & Eisen")) {
+        curEra = Era::IronAge;
+    } else if (curEra == Era::StoneAge && tribe.Skills().IsResearched("Bronzelegierung & Guss")) {
+        curEra = Era::BronzeAge;
+    }
     HistoricalEpoch curEpoch = tribe.Age().CurrentEpoch();
     int doneMilestones = tribe.Skills().GetMilestonesCompleted(curEra);
     int totalMilestones = std::max(1, tribe.Skills().GetMilestonesTotal(curEra));
@@ -164,6 +169,8 @@ void SkillTreeUI::Draw(const Tribe& tribe, Vector2 mousePos) const {
 
         if (isCurrent) {
             FontManager::DrawTextShadow("[AKTIV]", cx + colWidth - 85.0f, headerRect.y + 11.0f, 15.0f, GOLD);
+        } else if (colEra < curEra) {
+            FontManager::DrawTextShadow("[GEMEISTERT]", cx + colWidth - 125.0f, headerRect.y + 11.0f, 14.0f, Color{ 140, 220, 140, 255 });
         }
     }
 

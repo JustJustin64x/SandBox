@@ -100,10 +100,10 @@ void POIManager::InitWorldPOIs(const World& world, Vector2 campPos) {
            "Kolossale, aufgerichtete Steinblöcke unserer Ahnen. Zentrum für Glauben und Weisheit.",
            { false, false, true }, Era::StoneAge, 0.0f);
 
-    // 3. Späte Steinzeit / Kupferzeit: Kupfer-Aufschluss (benötigt Spitzhacke + Proviant)
+    // 3. Bronzezeit: Kupfer-Aufschluss (benötigt Spitzhacke + Proviant)
     addPOI(POIType::CopperOutcrop, "Kupfer-Aufschluss",
            "Gesteinsadern mit leuchtend grünem Malachit und rötlichem Rohkupfer.",
-           { false, true, true }, Era::StoneAge, 0.0f);
+           { false, true, true }, Era::BronzeAge, 0.0f);
 
     // 4. Bronzezeit: Zinn-Flussbett (benötigt Spitzhacke/Grabwerkzeug + Proviant)
     addPOI(POIType::TinRiverbed, "Zinn-Flussbett",
@@ -113,7 +113,7 @@ void POIManager::InitWorldPOIs(const World& world, Vector2 campPos) {
     // 5. Eisenzeit: Eisenerz-Spalte (benötigt Fackel + Spitzhacke + Proviant)
     addPOI(POIType::IronRift, "Eisenerz-Spalte",
            "Eine tiefe Felsspalte mit rötlich-schwarzen Hämatit-Adern für Eisenverhüttung.",
-           { true, true, true }, Era::BronzeAge, 0.0f);
+           { true, true, true }, Era::IronAge, 0.0f);
 }
 
 bool POIManager::PlacePOISpot(const World& world, Vector2 campPos, POIType type, Vector2& outPos) const {
@@ -242,11 +242,11 @@ bool POIManager::HasRequiredGear(const PointOfInterest& poi, const Stockpile& st
     return true;
 }
 
-int POIManager::FindBestForExpedition(Vector2 from, const Stockpile& stock, int targetPoiId) const {
+int POIManager::FindBestForExpedition(Vector2 from, const Stockpile& stock, int targetPoiId, Era currentEra) const {
     // Wenn ein bestimmter POI gezielt fokussiert wird
     if (targetPoiId >= 0) {
         const auto* target = Get(targetPoiId);
-        if (target && target->CanBeExplored() && target->state != POIState::Explored) {
+        if (target && target->CanBeExplored() && target->state != POIState::Explored && target->requiredEra <= currentEra) {
             if (HasRequiredGear(*target, stock)) {
                 return target->id;
             }
@@ -254,13 +254,14 @@ int POIManager::FindBestForExpedition(Vector2 from, const Stockpile& stock, int 
         return -1;
     }
 
-    // Ansonsten den nächstgelegenen erforschbaren POI suchen
+    // Ansonsten den nächstgelegenen erforschbaren POI der aktuellen oder früheren Epoche suchen
     int bestId = -1;
     float bestDist = 1e9f;
 
     for (const auto& poi : pois_) {
         if (!poi.CanBeExplored()) continue;
         if (poi.state == POIState::Explored) continue;
+        if (poi.requiredEra > currentEra) continue; // Epochen-Schranke: Keine Eisen-Spalte in der Steinzeit!
         if (!HasRequiredGear(poi, stock)) continue;
 
         float dist = Vector2Distance(from, poi.position);

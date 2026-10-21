@@ -115,6 +115,7 @@ void Tribe::InitWorld(const World& world) {
 }
 
 void Tribe::Update(const World& world, const std::vector<Caveman>& cavemen, int population, float dt, EventLog& log) {
+    population_ = population;
     hierarchy_.Update(dt);
     // 0. Gebäude-Tick: Brennstoffverbrauch der Feuerstellen & natürlicher Witterungsverschleiß
     bool isBadWeather = world.Env() &&
@@ -143,6 +144,7 @@ void Tribe::Update(const World& world, const std::vector<Caveman>& cavemen, int 
 
     // 2. Skilltree aktualisieren & autonomen Fokus nach Stammes-Defizit wählen
     skillTree_.Update(pois_, log);
+    skillTree_.CheckEpochAdvancement(&age_, &log);
     bool coldUrgent = (buildings_.FindFireNeedingFuel(campPos_) >= 0);
     bool toolsUrgent = (stock_.tools < std::max(1, population / 2));
     for (const auto& c : cavemen) {
@@ -171,21 +173,8 @@ void Tribe::Update(const World& world, const std::vector<Caveman>& cavemen, int 
         }
     }
 
-    // 5. Nahrungskonservierung / Verderb (gekochte Mahlzeiten halten deutlich länger als Rohkost!)
-    spoilageTimer_ += dt;
-    int pantries = buildings_.GetBuildingCount(BuildingType::Pantry, true);
-    float spoilageInterval = (pantries > 0) ? 60.0f : 16.0f;
-
-    if (spoilageTimer_ >= spoilageInterval) {
-        spoilageTimer_ = 0.0f;
-        if (stock_.food > 18) {
-            stock_.food--;
-            skillTree_.AddPractice("masonry", 3.5f, log);
-            if (pantries == 0) {
-                log.Add("1 Einheit rohe Nahrung ist verdorben. Vorratskammer oder Kochen am Feuer schützt Vorräte!", { 200, 140, 100, 255 });
-            }
-        }
-    }
+    // 5. Nahrungskonservierung / Verderb (AUFTRAG PHASE 4: Pantry stoppt Verderb & Event-Log Rate-Limit)
+    UpdateDecay(dt, log);
 
     // 6. Strategische Expansionsziele nach Ressourcen-Defiziten ermitteln (Phase 3)
     UpdateStrategicExpansionPlan(world);
@@ -195,6 +184,59 @@ void Tribe::Update(const World& world, const std::vector<Caveman>& cavemen, int 
 
     // 8. Territoriale Reichskapazität berechnen (Phase 1)
     UpdateEmpireCapacity(cavemen);
+}
+
+// AUFTRAG PHASE 4.2 & 4.3: Vorratskammer-Verderb & Rate-Limiting
+bool Tribe::HasBuilding(BuildingType type, bool finishedOnly) const {
+    return buildings_.HasBuilding(type, finishedOnly);
+}
+
+Building* Tribe::GetBuilding(BuildingType type, bool finishedOnly) {
+    return buildings_.GetBuilding(type, finishedOnly);
+}
+
+const Building* Tribe::GetBuilding(BuildingType type, bool finishedOnly) const {
+    return buildings_.GetBuilding(type, finishedOnly);
+}
+
+void Tribe::UpdateDecay(float dt, EventLog& log) {
+    if (lastDecayLogTimer > 0.0f) {
+        lastDecayLogTimer -= dt;
+    }
+
+    // AUFTRAG PHASE 4.2: Vorratskammer (Pantry) stoppt Verderb
+    bool hasPantry = HasBuilding(BuildingType::Pantry) && GetBuilding(BuildingType::Pantry)->IsConstructed();
+    float decayChance = 1.0f;
+    if (hasPantry) {
+        decayChance *= 0.0f; // Gar kein Verderb im Lager bei existierender Vorratskammer
+    }
+
+    if (decayChance <= 0.0f) {
+        return; // Verderb vollständig gestoppt
+    }
+
+    spoilageTimer_ += dt;
+    float spoilageInterval = 16.0f / decayChance;
+    if (spoilageTimer_ >= spoilageInterval) {
+        spoilageTimer_ = 0.0f;
+        if (stock_.food > 18) {
+            stock_.food--;
+            skillTree_.AddPractice("masonry", 3.5f, log);
+
+            // AUFTRAG PHASE 4.3: Rate-Limiting für das Event-Log (Max 1 Log-Eintrag alle 30 Sekunden)
+            if (lastDecayLogTimer <= 0.0f) {
+                log.Add("1 Einheit rohe Nahrung ist verdorben. Vorratskammer oder Kochen am Feuer schützt Vorräte!", { 200, 140, 100, 255 });
+                EventLog::AddMessage("1 Einheit rohe Nahrung ist verdorben. Vorratskammer oder Kochen am Feuer schützt Vorräte!", { 200, 140, 100, 255 });
+                lastDecayLogTimer = 30.0f;
+            }
+        }
+    }
+}
+
+void Tribe::UpdateDecay(float dt) {
+    if (EventLog::Instance()) {
+        UpdateDecay(dt, *EventLog::Instance());
+    }
 }
 
 void Tribe::UpdateStrategicExpansionPlan(const World& world) {
@@ -366,10 +408,10 @@ bool Tribe::FindBuildingSpotAround(const World& world, Vector2 center, Vector2& 
             if (!bordersOwn) continue;
         }
 
-        // Mindestens 2 Kacheln Abstand zu allen anderen Gebäuden
+        // Mindestens 3 Kacheln Abstand zu allen anderen Gebäuden (BLOCK 4.2)
         bool blocked = false;
         for (const auto& b : buildings_.All()) {
-            if (Vector2Distance(b.position, p) < 2.0f * TILE_SIZE) { blocked = true; break; }
+            if (Vector2Distance(b.position, p) < 3.0f * TILE_SIZE) { blocked = true; break; }
         }
         if (blocked) continue;
 
@@ -380,6 +422,34 @@ bool Tribe::FindBuildingSpotAround(const World& world, Vector2 center, Vector2& 
 }
 
 bool Tribe::FindBuildingSpot(const World& world, Vector2& out) const {
+    return FindBuildingSpotAround(world, campPos_, out);
+}
+
+bool Tribe::FindGraveyardSpot(const World& world, Vector2& out) const {
+    // BLOCK 4.2: Platziere Gräber geordnet am äußeren Rand des Dorfes (Friedhofs-/Gedenksektor, 8-14 Kacheln vom Camp)
+    for (int attempt = 0; attempt < 80; ++attempt) {
+        float angle = (float)GetRandomValue(30, 120) / 180.0f * PI;
+        float radius = (float)GetRandomValue(8 * TILE_SIZE, 14 * TILE_SIZE);
+        Vector2 p = { campPos_.x + std::cos(angle) * radius, campPos_.y - std::sin(angle) * radius };
+
+        if (!world.IsWalkable(p)) continue;
+
+        // Mindestens 3 Kacheln Abstand zu allen anderen Gebäuden
+        bool blocked = false;
+        for (const auto& b : buildings_.All()) {
+            if (Vector2Distance(b.position, p) < 3.0f * TILE_SIZE) { blocked = true; break; }
+        }
+        if (blocked) continue;
+
+        int tx = World::ToTile(p.x);
+        int ty = World::ToTile(p.y);
+        if (!world.IsInBounds(tx, ty)) continue;
+        int owner = world.GetOwnerTribeId(tx, ty);
+        if (owner != id_) continue;
+
+        out = p;
+        return true;
+    }
     return FindBuildingSpotAround(world, campPos_, out);
 }
 
@@ -430,7 +500,22 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
         planner_.requiredCost = proto.GetBuildCost();
         planner_.description = "Neue Hütte (Schlafplätze fehlen)";
     }
-    // Priorität 2: Steinklingen ("flint") oder Bronzezeit erreicht & noch keine Werkbank -> Werkbank planen
+    // Priorität 2: Epochen-Upgrade Stammeszentrum (Feuerkreis -> Langhaus -> Rathaus)
+    else if ([&]() {
+        for (const auto& b : buildings_.All()) {
+            if (b.type == BuildingType::TownCenter && b.CanUpgrade(eraIdx)) {
+                planner_.active = true;
+                planner_.isUpgrade = true;
+                planner_.upgradeBuildingId = b.id;
+                planner_.type = b.type;
+                planner_.requiredCost = b.GetUpgradeCost();
+                planner_.description = TextFormat("Epochen-Ausbau %s -> %s", BuildingTypeName(b.type, b.tier), BuildingTypeName(b.type, b.tier + 1));
+                return true;
+            }
+        }
+        return false;
+    }()) {}
+    // Priorität 3: Steinklingen ("flint") oder Bronzezeit erreicht & noch keine Werkbank -> Werkbank planen
     else if ((skillTree_.IsUnlocked("flint") || era >= Era::BronzeAge) &&
              buildings_.GetBuildingCount(BuildingType::CraftBench, false) == 0) {
         Building proto;
@@ -441,7 +526,7 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
         planner_.requiredCost = proto.GetBuildCost();
         planner_.description = "Werkbank (Werkzeuge, Kleidung & Balken)";
     }
-    // Priorität 2b: Neolithische Wende -> Ackerfeld (FarmPlot) nach Entdeckung von Ackerbau & Saatgut
+    // Priorität 3b: Neolithische Wende -> Ackerfeld (FarmPlot) nach Entdeckung von Ackerbau & Saatgut
     else if ((skillTree_.IsUnlocked("agriculture") || era >= Era::BronzeAge) &&
              buildings_.GetBuildingCount(BuildingType::FarmPlot, false) < desiredFarms) {
         Building proto;
@@ -452,7 +537,7 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
         planner_.requiredCost = proto.GetBuildCost();
         planner_.description = "Ackerfeld (Getreideanbau)";
     }
-    // Priorität 3: Vorräte verderben / Bronzezeit erreicht & keine Vorratskammer -> Pantry planen
+    // Priorität 3c: Vorräte verderben / Bronzezeit erreicht & keine Vorratskammer -> Pantry planen
     else if (buildings_.GetBuildingCount(BuildingType::Pantry, false) == 0 &&
              (stock_.food >= 16 || era >= Era::BronzeAge)) {
         Building proto;
@@ -463,7 +548,7 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
         planner_.requiredCost = proto.GetBuildCost();
         planner_.description = "Vorratskammer (Schutz vor Verderb)";
     }
-    // Priorität 3b: Lehmofen (Kiln) ab Fackel-Technologie / Bronzezeit für Ziegelbrand, Kochen & Verhüttung
+    // Priorität 3d: Lehmofen (Kiln) ab Fackel-Technologie / Bronzezeit für Ziegelbrand, Kochen & Verhüttung
     else if ((skillTree_.IsUnlocked("torches") || era >= Era::BronzeAge) &&
              buildings_.GetBuildingCount(BuildingType::Kiln, false) == 0) {
         Building proto;
@@ -474,7 +559,47 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
         planner_.requiredCost = proto.GetBuildCost();
         planner_.description = "Lehmofen (Ziegelbrand, Kochen & Schmelze)";
     }
-    // Priorität 3c: Tierzucht-Gehege (AnimalPen) ab Bronzezeit / Zimmererkunst (Meilenstein D)
+    // Priorität 4 (BLOCK 1.2): Bestehende Hütten auf Stufe 2 (Holzhütte) / Stufe 3 (Steinhaus) ausbauen!
+    else if (era >= Era::BronzeAge && [&]() {
+        for (const auto& b : buildings_.All()) {
+            if (b.type == BuildingType::Hut && b.CanUpgrade(eraIdx)) {
+                planner_.active = true;
+                planner_.isUpgrade = true;
+                planner_.upgradeBuildingId = b.id;
+                planner_.type = b.type;
+                planner_.requiredCost = b.GetUpgradeCost();
+                planner_.description = TextFormat("Hütten-Ausbau -> %s", BuildingTypeName(BuildingType::Hut, b.tier + 1));
+                return true;
+            }
+        }
+        return false;
+    }()) {}
+    // Priorität 5: Wachturm in der Eisenzeit
+    else if (era >= Era::IronAge && buildings_.GetBuildingCount(BuildingType::Watchtower, false) == 0) {
+        Building proto;
+        proto.type = BuildingType::Watchtower;
+        proto.tier = 1;
+        planner_.active = true;
+        planner_.type = BuildingType::Watchtower;
+        planner_.requiredCost = proto.GetBuildCost();
+        planner_.description = "Wachturm (Grenzschutz)";
+    }
+    // Priorität 6: Lehmofen (Kiln) oder Monument auf nächste Stufe ausbauen
+    else if ([&]() {
+        for (const auto& b : buildings_.All()) {
+            if ((b.type == BuildingType::Kiln || b.type == BuildingType::Monument) && b.CanUpgrade(eraIdx)) {
+                planner_.active = true;
+                planner_.isUpgrade = true;
+                planner_.upgradeBuildingId = b.id;
+                planner_.type = b.type;
+                planner_.requiredCost = b.GetUpgradeCost();
+                planner_.description = TextFormat("Ausbau %s -> %s", BuildingTypeName(b.type, b.tier), BuildingTypeName(b.type, b.tier + 1));
+                return true;
+            }
+        }
+        return false;
+    }()) {}
+    // Priorität 7: Tierzucht-Gehege (AnimalPen) ab Bronzezeit / Zimmererkunst
     else if ((era >= Era::BronzeAge || skillTree_.IsUnlocked("carpentry")) &&
              buildings_.GetBuildingCount(BuildingType::AnimalPen, false) == 0) {
         Building proto;
@@ -485,7 +610,7 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
         planner_.requiredCost = proto.GetBuildCost();
         planner_.description = "Tiergehege (Domestizierte Herde)";
     }
-    // Priorität 3d: Stammes-Monument / Totempfahl (Monument) für Kultur & Moral (Meilenstein E)
+    // Priorität 8: Stammes-Monument / Totempfahl (Monument) für Kultur & Moral
     else if ((skillTree_.IsUnlocked("torches") || era >= Era::BronzeAge) &&
              buildings_.GetBuildingCount(BuildingType::Monument, false) == 0) {
         Building proto;
@@ -495,47 +620,6 @@ void Tribe::UpdateSettlementPlanner(const World& world, const std::vector<Cavema
         planner_.type = BuildingType::Monument;
         planner_.requiredCost = proto.GetBuildCost();
         planner_.description = "Totempfahl (Stammeskultur & Moral)";
-    }
-    // Priorität 4: Stammeszentrum (TownCenter), Lehmofen (Kiln) oder Monument auf nächste Epochen-Stufe ausbauen
-    else {
-        for (const auto& b : buildings_.All()) {
-            if ((b.type == BuildingType::TownCenter || b.type == BuildingType::Kiln || b.type == BuildingType::Monument) &&
-                b.CanUpgrade(eraIdx)) {
-                planner_.active = true;
-                planner_.isUpgrade = true;
-                planner_.upgradeBuildingId = b.id;
-                planner_.type = b.type;
-                planner_.requiredCost = b.GetUpgradeCost();
-                planner_.description = TextFormat("Ausbau %s -> %s", BuildingTypeName(b.type, b.tier), BuildingTypeName(b.type, b.tier + 1));
-                break;
-            }
-        }
-    }
-
-    // Priorität 5: Wachturm in der Eisenzeit
-    if (!planner_.active && era >= Era::IronAge && buildings_.GetBuildingCount(BuildingType::Watchtower, false) == 0) {
-        Building proto;
-        proto.type = BuildingType::Watchtower;
-        proto.tier = 1;
-        planner_.active = true;
-        planner_.type = BuildingType::Watchtower;
-        planner_.requiredCost = proto.GetBuildCost();
-        planner_.description = "Wachturm (Grenzschutz)";
-    }
-
-    // Priorität 6: Bestehende Hütten auf Stufe 2 (Holzhütte) / Stufe 3 (Steinhaus) ausbauen
-    if (!planner_.active && era >= Era::BronzeAge) {
-        for (const auto& b : buildings_.All()) {
-            if (b.type == BuildingType::Hut && b.CanUpgrade(eraIdx)) {
-                planner_.active = true;
-                planner_.isUpgrade = true;
-                planner_.upgradeBuildingId = b.id;
-                planner_.type = b.type;
-                planner_.requiredCost = b.GetUpgradeCost();
-                planner_.description = TextFormat("Hütten-Ausbau -> %s", BuildingTypeName(BuildingType::Hut, b.tier + 1));
-                break;
-            }
-        }
     }
 
     // Priorität 7: Abgespaltene Splitter-Siedlungen mit einer eigenen Hütte ausbauen
@@ -632,6 +716,19 @@ int Tribe::EnsureConstructionSite(const World& world, EventLog& log) {
         return buildings_.FindActiveConstructionSite(campPos_);
     }
 
+    if (planner_.active && planner_.isUpgrade && planner_.upgradeBuildingId >= 0) {
+        const ResourceCost& c = planner_.requiredCost;
+        if (stock_.wood >= c.wood && stock_.stone >= c.stone &&
+            stock_.planks >= c.planks && stock_.bricks >= c.bricks) {
+            if (buildings_.StartUpgrade(planner_.upgradeBuildingId, stock_, age_, log)) {
+                int uid = planner_.upgradeBuildingId;
+                planner_.active = false;
+                return uid;
+            }
+        }
+        return -1;
+    }
+
     BuildingType nextType = planner_.active ? planner_.type : BuildingType::Hut;
     Building proto;
     proto.type = nextType;
@@ -702,6 +799,7 @@ void Tribe::DrawTerritoryOverlay(const World& world, float /*simTime*/) const {
 }
 
 void Tribe::Draw(float time, const World* world, Vector2 mouseWorld) const {
+    if (isDisbanded_) return; // Ausgelöschte Stämme ausblenden (BLOCK 3.5)
     buildings_.Draw(time, world, mouseWorld);
     DrawStockpile(world);
 
@@ -713,8 +811,8 @@ void Tribe::Draw(float time, const World* world, Vector2 mouseWorld) const {
     DrawRectangleRoundedLinesEx({ labelPos.x - tw * 0.5f - 6.0f, labelPos.y - 3.0f, tw + 12.0f, 18.0f }, 0.35f, 4, 1.2f, factionColor_);
     FontManager::DrawTextCenteredShadow(name_.c_str(), labelPos.x, labelPos.y, 13.0f, factionColor_);
 
-    // Wenn der Siedlungsplaner auf Rohstoffe wartet: Dezente Info oberhalb des Banners (stört das Feuer nicht)
-    if (planner_.active) {
+    // Wenn der Siedlungsplaner auf Rohstoffe wartet: Hover-Info bei Mouse-Hover über dem Lager (BLOCK 4.1)
+    if (planner_.active && Vector2Distance(mouseWorld, campPos_) <= 1.5f * TILE_SIZE) {
         float visualY = campPos_.y - 78.0f + campYOffset;
         Vector2 p = { campPos_.x, visualY };
         float pw = FontManager::MeasureText(planner_.description.c_str(), 11.0f);
